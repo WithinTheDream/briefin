@@ -5,7 +5,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 logger = logging.getLogger(__name__)
 
-SECTORS_API_BASE_URL = "https://api.sectors.app/v1"
+# Sectors API v2 (v1 was discontinued on 2026-05-11)
+SECTORS_API_BASE_URL = "https://api.sectors.app/v2"
 
 class SectorsAPIError(Exception):
     """Custom exception for Sectors API errors."""
@@ -15,8 +16,10 @@ def get_headers():
     api_key = os.getenv("SECTORS_API_KEY")
     if not api_key:
         raise ValueError("SECTORS_API_KEY is not set in environment variables.")
+    # Sectors API expects raw key in Authorization header
+    auth_header = api_key.strip()
     return {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": auth_header,
         "Accept": "application/json"
     }
 
@@ -26,7 +29,7 @@ def get_headers():
     retry=retry_if_exception_type((requests.RequestException, SectorsAPIError)),
     reraise=True
 )
-def fetch_endpoint(endpoint: str, params: dict = None) -> dict:
+def fetch_endpoint(endpoint: str, params: dict = None):
     url = f"{SECTORS_API_BASE_URL}{endpoint}"
     logger.info(f"Fetching data from {url}")
     
@@ -39,21 +42,17 @@ def fetch_endpoint(endpoint: str, params: dict = None) -> dict:
     return response.json()
 
 def get_idx_total():
-    """Fetch total market cap summary."""
+    """Fetch total IDX market cap summary."""
     return fetch_endpoint("/idx-total/")
 
 def get_ihsg():
-    """Fetch IHSG index value and daily change."""
-    return fetch_endpoint("/index/ihsg/")
+    """Fetch IHSG daily index records."""
+    return fetch_endpoint("/index-daily/ihsg/")
 
 def get_top_changes():
-    """Fetch top gainers and losers."""
-    return fetch_endpoint("/companies/top-changes/")
+    """Fetch top gainers and losers for 1-day period."""
+    return fetch_endpoint("/companies/top-changes/", params={"periods": "1d"})
 
 def get_subsectors():
     """Fetch list of subsectors."""
     return fetch_endpoint("/subsectors/")
-
-def get_top_companies_by_subsector(subsector: str):
-    """Fetch top performing companies for a given subsector."""
-    return fetch_endpoint("/companies/top/", params={"sub_sector": subsector})

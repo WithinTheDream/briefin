@@ -1,0 +1,36 @@
+name: Daily Market Brief
+
+on:
+  schedule:
+    # Run at 23:30 UTC (06:30 WIB) every Monday to Friday
+    # 0 = Sunday, 1 = Monday ... 4 = Thursday. Wait, UTC 23:30 on Sunday is Monday 06:30 WIB.
+    # So 0-4 (Sun-Thu in UTC) corresponds to Mon-Fri morning in WIB.
+    - cron: '30 23 * * 0-4'
+  workflow_dispatch: {}
+
+jobs:
+  run-daily-brief:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Run sectors-daily-brief
+        env:
+          SECTORS_API_KEY: ${{ secrets.SECTORS_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python src/main.py

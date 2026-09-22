@@ -23,6 +23,29 @@ def format_for_whatsapp(text: str) -> str:
     formatted = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
     return formatted
 
+def upload_image_to_host(image_path: str) -> str:
+    """
+    Uploads the image to Catbox to obtain a direct, permanent public URL.
+    Fonnte requires a direct public URL to reliably send media to WhatsApp.
+    Returns None on failure.
+    """
+    try:
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                "https://catbox.moe/user/api.php",
+                data={"reqtype": "fileupload"},
+                files={"fileToUpload": ("market_card.png", f, "image/png")},
+                timeout=20
+            )
+            if resp.status_code == 200 and resp.text.startswith("http"):
+                public_url = resp.text.strip()
+                logger.info(f"Successfully uploaded card to public URL: {public_url}")
+                return public_url
+            logger.warning(f"Failed uploading image to Catbox: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Exception during image upload to Catbox: {e}")
+    return None
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -60,13 +83,25 @@ def send_whatsapp_message(message_text: str, target: str = None, image_path: str
     }
     
     if image_path and os.path.exists(image_path):
-        logger.info(f"Sending image {image_path} with caption to WhatsApp target {whatsapp_target} via Fonnte...")
-        with open(image_path, "rb") as f:
-            files = {"file": f}
-            response = requests.post(FONNTE_API_URL, headers=headers, data=payload, files=files, timeout=30)
+        # 1. First attempt: upload to public host so Fonnte can download via 'url'
+        public_url = upload_image_to_host(image_path)
+        if public_url:
+            payload["url"] = public_url
+            payload["filename"] = "market_card.png"
+            logger.info(f"Sending image via public URL with caption to WhatsApp target {whatsapp_target} via Fonnte...")
+            response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=20)
+        else:
+            # 2. Fallback: local file upload with explicit filename tuple
+            logger.info(f"Sending local image file to WhatsApp target {whatsapp_target} via Fonnte...")
+            with open(image_path, "rb") as f:
+                files = {"file": ("market_card.png", f, "image/png")}
+                payload["filename"] = "market_card.png"
+                response = requests.post(FONNTE_API_URL, headers=headers, data=payload, files=files, timeout=30)
     else:
         logger.info(f"Sending message to WhatsApp target {whatsapp_target} via Fonnte...")
         response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=15)
+    
+    logger.info(f"Fonnte response [{response.status_code}]: {response.text}")
     
     if response.status_code != 200:
         logger.error(f"Fonnte API Error: {response.status_code} - {response.text}")

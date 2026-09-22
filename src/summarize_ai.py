@@ -15,35 +15,47 @@ def _summarize_with_gemini(api_key: str, prompt: str) -> str:
     
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
-        payload = {
-            "contents": [
-                {
-                    "parts": [{"text": prompt}]
-                }
-            ],
-            "generationConfig": {
+        
+        # Try first with thinkingBudget: 0 to maximize output speed and save token quota for text
+        for include_thinking_config in [True, False]:
+            gen_config = {
                 "temperature": 0.7,
-                "maxOutputTokens": 1000
+                "maxOutputTokens": 3000
             }
-        }
-        try:
-            response = requests.post(url, json=payload, timeout=25)
-            if response.status_code == 200:
-                data = response.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        text = parts[0].get("text", "").strip()
+            if include_thinking_config:
+                gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+
+            payload = {
+                "contents": [
+                    {
+                        "parts": [{"text": prompt}]
+                    }
+                ],
+                "generationConfig": gen_config
+            }
+            try:
+                response = requests.post(url, json=payload, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        finish_reason = candidates[0].get("finishReason")
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        texts = [p.get("text", "") for p in parts if not p.get("thought", False) and "text" in p]
+                        text = "".join(texts).strip()
                         if text:
-                            logger.info(f"Successfully generated summary using {model_name}")
+                            logger.info(f"Successfully generated summary using {model_name} (finishReason: {finish_reason})")
                             return text
-            logger.warning(f"Gemini API warning with {model_name}: {response.status_code} - {response.text}")
-        except Exception as e:
-            logger.warning(f"Gemini request exception for {model_name}: {e}")
-            
-    logger.error("All Gemini models failed to generate summary.")
-    return None
+                elif response.status_code == 400 and include_thinking_config:
+                    # Model might not support thinkingConfig, retry without it
+                    continue
+                logger.warning(f"Gemini API warning with {model_name} (thinkingConfig={include_thinking_config}): {response.status_code} - {response.text}")
+            except Exception as e:
+                logger.warning(f"Gemini request exception for {model_name}: {e}")
+                
+            # If standard request without thinkingConfig also failed, proceed to next model
+            if not include_thinking_config:
+                break
 
 def _summarize_with_anthropic(api_key: str, prompt: str) -> str:
     """Summarize using Anthropic Claude 3.5 Sonnet."""
@@ -88,16 +100,19 @@ Susunan Pesan:
    - Berikan narasi singkat mengenai mood/sentimen pasar (apakah IHSG sedang terkoreksi wajar, konsolidasi, optimis, profit taking, atau wait-and-see).
 2. 📊 **Rangkuman Performa IHSG**:
    - Tampilkan angka IHSG dan perubahannya dalam poin serta persentase dengan narasi singkat 1 kalimat.
-3. 🚀 **Sorotan Top Gainers & 🔻 Top Losers**:
-   - Tampilkan saham-saham top gainer dan top loser yang mencolok beserta persentasenya.
-   - Berikan ulasan singkat pada 1-2 saham yang pergerakannya paling agresif/menonjol.
-4. 💡 **Catatan Strategi & Tips Cuan Hari Ini**:
-   - Berikan 1-2 kalimat tips taktis yang relevan (misal: disiplin money management, amankan floating profit, wait-and-see di saham volatil, atau cermati sektor defensif).
+3. 🚀 **Top Gainers (Wajib Cantumkan Daftar Saham & Kenaikannya)**:
+   - Cantumkan 3-5 saham top gainers dengan format rapi (contoh: `• KODE: HARGA (+%PERSEN)`).
+   - Berikan ulasan 1 kalimat mengenai saham yang paling mencolok kenaikannya.
+4. 🔻 **Top Losers (Wajib Cantumkan Daftar Saham & Penurunannya)**:
+   - Cantumkan 3-5 saham top losers dengan format rapi (contoh: `• KODE: HARGA (-%PERSEN)`).
+   - Berikan ulasan 1 kalimat mengenai saham yang paling tertekan.
+5. 💡 **Catatan Strategi & Tips Cuan Hari Ini**:
+   - Berikan 1-2 kalimat tips taktis yang relevan (misal: disiplin money management, amankan floating profit, atau cermati sektor defensif).
 
 Format Tampilan:
 - Gunakan Bahasa Indonesia yang luwes, cerdas, dan enak dibaca.
 - Gunakan bullet points, baris spasi yang rapi, dan emoji yang relevan.
-- Cocok dibaca di WhatsApp dan Telegram (jangan terlalu panjang, maksimal 250-350 kata).
+- Cocok dibaca di WhatsApp dan Telegram (sekitar 200-300 kata, padat dan informatif).
 
 Data Pasar IDX:
 {formatted_data}

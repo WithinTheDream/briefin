@@ -6,28 +6,39 @@ from anthropic import Anthropic, APIError, APIConnectionError, RateLimitError
 logger = logging.getLogger(__name__)
 
 def _summarize_with_gemini(api_key: str, prompt: str) -> str:
-    """Summarize using Google Gemini API."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key.strip()}"
-    payload = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}]
+    """Summarize using Google Gemini API with support for modern flash models."""
+    models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 1000
             }
-        ],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 1000
         }
-    }
-    response = requests.post(url, json=payload, timeout=20)
-    if response.status_code == 200:
-        data = response.json()
-        candidates = data.get("candidates", [])
-        if candidates:
-            parts = candidates[0].get("content", {}).get("parts", [])
-            if parts:
-                return parts[0].get("text")
-    logger.error(f"Gemini API Error: {response.status_code} - {response.text}")
+        try:
+            response = requests.post(url, json=payload, timeout=25)
+            if response.status_code == 200:
+                data = response.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        text = parts[0].get("text", "").strip()
+                        if text:
+                            logger.info(f"Successfully generated summary using {model_name}")
+                            return text
+            logger.warning(f"Gemini API warning with {model_name}: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.warning(f"Gemini request exception for {model_name}: {e}")
+            
+    logger.error("All Gemini models failed to generate summary.")
     return None
 
 def _summarize_with_anthropic(api_key: str, prompt: str) -> str:
@@ -36,6 +47,7 @@ def _summarize_with_anthropic(api_key: str, prompt: str) -> str:
     message = client.messages.create(
         model="claude-3-5-sonnet-20240620",
         max_tokens=1000,
+        temperature=0.7,
         messages=[
             {
                 "role": "user",
@@ -48,6 +60,7 @@ def _summarize_with_anthropic(api_key: str, prompt: str) -> str:
 def summarize_market_data(formatted_data: str) -> str:
     """
     Summarizes market data using either Gemini or Anthropic (whichever API key is available).
+    Returns a dynamic, engaging morning market narrative.
     Returns None if neither is set or if both fail.
     """
     gemini_key = os.getenv("GEMINI_API_KEY")
@@ -58,13 +71,33 @@ def summarize_market_data(formatted_data: str) -> str:
         return None
 
     prompt = f"""
-    Tolong buatkan ringkasan singkat dan menarik (market brief harian) dalam Bahasa Indonesia berdasarkan data pasar saham IDX berikut ini.
-    Brief ini akan dikirim ke Telegram dan WhatsApp setiap pagi. Jangan terlalu panjang, buat to the point, gunakan bullet points dan emoji yang sesuai.
-    Sertakan ringkasan performa IHSG, top gainers/losers yang menarik, dan sektor yang menonjol.
-    
-    Data Mentah:
-    {formatted_data}
-    """
+Anda adalah analis pasar modal handal dan kurator konten finansial profesional.
+Tugas Anda: Buat narasi MORNING MARKET BRIEF harian untuk bursa saham Indonesia (IHSG / IDX) berdasarkan data di bawah ini.
+
+PENTING - Kebutuhan Narasi & Variasi:
+- Narasi HARUS bervariasi, dinamis, segar, dan tidak terdengar seperti template kaku buatan bot.
+- Tuliskan cerita di balik angka: mengapa pergerakan kemarin penting dan apa yang perlu diwaspadai investor hari ini.
+
+Susunan Pesan:
+1. ☀️ **Sapaan Pagi & Narasi Sentimen**:
+   - Mulai dengan sapaan pagi yang ramah dan inspiratif.
+   - Berikan narasi singkat mengenai mood/sentimen pasar (apakah IHSG sedang terkoreksi wajar, konsolidasi, optimis, profit taking, atau wait-and-see).
+2. 📊 **Rangkuman Performa IHSG**:
+   - Tampilkan angka IHSG dan perubahannya dalam poin serta persentase dengan narasi singkat 1 kalimat.
+3. 🚀 **Sorotan Top Gainers & 🔻 Top Losers**:
+   - Tampilkan saham-saham top gainer dan top loser yang mencolok beserta persentasenya.
+   - Berikan ulasan singkat pada 1-2 saham yang pergerakannya paling agresif/menonjol.
+4. 💡 **Catatan Strategi & Tips Cuan Hari Ini**:
+   - Berikan 1-2 kalimat tips taktis yang relevan (misal: disiplin money management, amankan floating profit, wait-and-see di saham volatil, atau cermati sektor defensif).
+
+Format Tampilan:
+- Gunakan Bahasa Indonesia yang luwes, cerdas, dan enak dibaca.
+- Gunakan bullet points, baris spasi yang rapi, dan emoji yang relevan.
+- Cocok dibaca di WhatsApp dan Telegram (jangan terlalu panjang, maksimal 250-350 kata).
+
+Data Pasar IDX:
+{formatted_data}
+"""
 
     # 1. Try Gemini if configured
     if gemini_key:
@@ -72,7 +105,6 @@ def summarize_market_data(formatted_data: str) -> str:
             logger.info("Calling Google Gemini API for summarization...")
             summary = _summarize_with_gemini(gemini_key, prompt)
             if summary:
-                logger.info("Successfully generated AI summary via Gemini.")
                 return summary
         except Exception as e:
             logger.error(f"Error during Gemini summarization: {e}")

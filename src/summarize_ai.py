@@ -88,31 +88,29 @@ def summarize_market_data(formatted_data: str) -> str:
 
     prompt = f"""
 Anda adalah analis pasar modal handal dan kurator konten finansial profesional.
-Tugas Anda: Buat narasi MORNING MARKET BRIEF harian untuk bursa saham Indonesia (IHSG / IDX) berdasarkan data di bawah ini.
+Tugas Anda: Buat pesan NARASI MORNING MARKET BRIEF harian untuk bursa saham Indonesia (IHSG / IDX) berdasarkan data di bawah ini.
 
-PENTING - Kebutuhan Narasi & Variasi:
-- Narasi HARUS bervariasi, dinamis, segar, dan tidak terdengar seperti template kaku buatan bot.
-- Tuliskan cerita di balik angka: mengapa pergerakan kemarin penting dan apa yang perlu diwaspadai investor hari ini.
+PENTING - Konteks Pesan & Infografis:
+- Pesan teks ini akan dikirim bersama KARTU INFOGRAFIS GAMBAR yang sudah menampilkan tabel lengkap Top 5 Gainers dan Top 5 Losers.
+- Oleh karena itu, pesan teks ini BUKAN tabel angka mentah, melainkan MURNI NARASI PASAR (cerita, sentimen, dan strategi).
+- Narasi HARUS bervariasi, dinamis, segar, cerdas, dan tidak terdengar seperti template bot yang kaku.
 
-Susunan Pesan:
+Susunan Narasi Pesan:
 1. ☀️ **Sapaan Pagi & Narasi Sentimen**:
-   - Mulai dengan sapaan pagi yang ramah dan inspiratif.
-   - Berikan narasi singkat mengenai mood/sentimen pasar (apakah IHSG sedang terkoreksi wajar, konsolidasi, optimis, profit taking, atau wait-and-see).
-2. 📊 **Rangkuman Performa IHSG**:
-   - Tampilkan angka IHSG dan perubahannya dalam poin serta persentase dengan narasi singkat 1 kalimat.
-3. 🚀 **Top Gainers (Wajib Cantumkan Daftar Saham & Kenaikannya)**:
-   - Cantumkan 3-5 saham top gainers dengan format rapi (contoh: `• KODE: HARGA (+%PERSEN)`).
-   - Berikan ulasan 1 kalimat mengenai saham yang paling mencolok kenaikannya.
-4. 🔻 **Top Losers (Wajib Cantumkan Daftar Saham & Penurunannya)**:
-   - Cantumkan 3-5 saham top losers dengan format rapi (contoh: `• KODE: HARGA (-%PERSEN)`).
-   - Berikan ulasan 1 kalimat mengenai saham yang paling tertekan.
-5. 💡 **Catatan Strategi & Tips Cuan Hari Ini**:
-   - Berikan 1-2 kalimat tips taktis yang relevan (misal: disiplin money management, amankan floating profit, atau cermati sektor defensif).
+   - Sapaan pagi yang hangat, inspiratif, dan bervariasi setiap hari.
+   - Narasi mendalam mengenai suasana/mood IHSG (apakah pasar sedang konsolidasi, tertekan aksi profit taking, optimis, atau wait-and-see sentimen makro).
+2. 📊 **Ulasan IHSG & Penggerak Pasar**:
+   - Tuliskan pergerakan IHSG kemarin (poin & persentase) dalam kalimat mengalir.
+   - Singgung secara naratif 1 atau 2 saham/sektor yang paling menarik perhatian (misal yang memimpin reli atau yang mengalami tekanan paling dalam) tanpa mengetik ulang seluruh daftar tabel.
+3. 💡 **Catatan Strategi & Tips Cuan Hari Ini**:
+   - Berikan 1-2 kalimat tips taktis yang aplikatif (misal: disiplin money management, amankan modal, cermati saham pullback di support, atau batasi transaksi di saham berfrekuensi tinggi).
+4. 📌 **Call to Action Singkat**:
+   - 1 baris singkat ramah (misal: "Detail daftar Top 5 Gainers & Losers lengkap dapat disimak pada infografis di atas!").
 
 Format Tampilan:
-- Gunakan Bahasa Indonesia yang luwes, cerdas, dan enak dibaca.
-- Gunakan bullet points, baris spasi yang rapi, dan emoji yang relevan.
-- Cocok dibaca di WhatsApp dan Telegram (sekitar 200-300 kata, padat dan informatif).
+- Gunakan Bahasa Indonesia yang santai tapi berbobot, luwes, dan enak dibaca.
+- Gunakan bullet points bila perlu, baris spasi yang rapi, dan emoji yang relevan.
+- Panjang sekitar 150-250 kata (padat, menarik, dan pas di layar ponsel).
 
 Data Pasar IDX:
 {formatted_data}

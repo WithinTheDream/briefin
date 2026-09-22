@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from fetch_sectors import get_idx_total, get_ihsg, get_top_changes
 from format_brief import normalize_data, format_data_for_ai, generate_fallback_message
 from summarize_ai import summarize_market_data
+from generate_card import generate_market_card
 from send_telegram import send_telegram_message
 from send_whatsapp import send_whatsapp_message
 
@@ -24,9 +25,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def dispatch_brief(message_text: str):
+def dispatch_brief(message_text: str, image_path: str = None):
     """
-    Sends the brief to configured channels (Telegram and/or WhatsApp via Fonnte).
+    Sends the brief to configured channels (Telegram and/or WhatsApp via Fonnte) with optional image card.
     """
     telegram_ready = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
     whatsapp_ready = bool(os.getenv("FONNTE_TOKEN") and os.getenv("WHATSAPP_TARGET"))
@@ -39,7 +40,7 @@ def dispatch_brief(message_text: str):
     if telegram_ready:
         try:
             logger.info("Sending brief to Telegram...")
-            send_telegram_message(message_text)
+            send_telegram_message(message_text, image_path=image_path)
             delivery_success = True
         except Exception as e:
             logger.error(f"Failed to send to Telegram: {e}")
@@ -47,7 +48,7 @@ def dispatch_brief(message_text: str):
     if whatsapp_ready:
         try:
             logger.info("Sending brief to WhatsApp via Fonnte...")
-            send_whatsapp_message(message_text)
+            send_whatsapp_message(message_text, image_path=image_path)
             delivery_success = True
         except Exception as e:
             logger.error(f"Failed to send to WhatsApp: {e}")
@@ -78,7 +79,7 @@ def main():
     # Load env vars for local development (will be ignored in GitHub Actions if not present)
     load_dotenv()
     
-    logger.info("Starting Sectors Daily Brief workflow...")
+    logger.info("Starting Briefin workflow...")
     
     try:
         # Step 1: Fetch Data
@@ -90,27 +91,31 @@ def main():
         # Step 2: Normalize Data
         normalized = normalize_data(idx_total, ihsg, top_changes)
         
-        # Step 3: Summarize via AI
+        # Step 3: Generate Market Infographic Card
+        logger.info("Generating market infographic card...")
+        image_path = generate_market_card(normalized, "logs/market_card.png")
+        
+        # Step 4: Summarize via AI
         formatted_for_ai = format_data_for_ai(normalized)
         ai_summary = summarize_market_data(formatted_for_ai)
         
-        # Step 4: Formatting Message
+        # Step 5: Formatting Message
         if ai_summary:
             logger.info("Using AI-generated summary.")
-            final_message = f"📊 **Sectors Daily Market Brief**\n\n{ai_summary.strip()}\n\n_Automated by Sectors Daily Brief_"
+            final_message = f"📊 **BRIEFIN • DAILY MARKET BRIEF**\n\n{ai_summary.strip()}\n\n_Automated by Briefin_"
         else:
             logger.warning("AI summary failed or was not configured. Using fallback template.")
             final_message = generate_fallback_message(normalized)
             
-        # Step 5: Dispatch to Telegram & WhatsApp
-        dispatch_brief(final_message)
+        # Step 6: Dispatch to Telegram & WhatsApp
+        dispatch_brief(final_message, image_path=image_path)
         
         logger.info("Workflow completed successfully.")
         
     except Exception as e:
         logger.exception("A critical error occurred in the workflow.")
         # Attempt to send error alert
-        error_msg = f"⚠️ **Sectors Daily Brief Alert**\n\nFailed to run morning brief workflow.\n\nError: `{str(e)}`"
+        error_msg = f"⚠️ **Briefin Alert**\n\nFailed to run morning brief workflow.\n\nError: `{str(e)}`"
         dispatch_error_alert(error_msg)
         sys.exit(1)
 

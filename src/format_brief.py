@@ -159,5 +159,6 @@ def generate_fallback_message(normalized_data: dict) -> str:
         msg += "- Tidak ada data losers\n"
         
     msg += f"\n{tip}\n"
-    msg += "\n_Automated by Sectors Daily Brief_"
+    msg += "\n📌 *Simak infografis gambar di atas untuk visual Top Gainers & Losers lengkap!*\n"
+    msg += "\n_Automated by Briefin_"
     return msg

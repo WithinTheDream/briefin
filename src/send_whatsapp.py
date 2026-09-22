@@ -29,13 +29,14 @@ def format_for_whatsapp(text: str) -> str:
     retry=retry_if_exception_type((requests.RequestException, WhatsAppError)),
     reraise=True
 )
-def send_whatsapp_message(message_text: str, target: str = None) -> dict:
+def send_whatsapp_message(message_text: str, target: str = None, image_path: str = None) -> dict:
     """
-    Sends a WhatsApp message via Fonnte API.
+    Sends a WhatsApp message via Fonnte API, with optional image attachment.
     
-    :param message_text: Text message to send.
+    :param message_text: Text message to send (used as caption if image is attached).
     :param target: Optional destination phone number or group ID. 
                    If not provided, uses WHATSAPP_TARGET from env.
+    :param image_path: Optional path to an image file to attach.
     :return: Response JSON from Fonnte.
     """
     fonnte_token = os.getenv("FONNTE_TOKEN")
@@ -58,8 +59,14 @@ def send_whatsapp_message(message_text: str, target: str = None) -> dict:
         "countryCode": "62"
     }
     
-    logger.info(f"Sending message to WhatsApp target {whatsapp_target} via Fonnte...")
-    response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=15)
+    if image_path and os.path.exists(image_path):
+        logger.info(f"Sending image {image_path} with caption to WhatsApp target {whatsapp_target} via Fonnte...")
+        with open(image_path, "rb") as f:
+            files = {"file": f}
+            response = requests.post(FONNTE_API_URL, headers=headers, data=payload, files=files, timeout=30)
+    else:
+        logger.info(f"Sending message to WhatsApp target {whatsapp_target} via Fonnte...")
+        response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=15)
     
     if response.status_code != 200:
         logger.error(f"Fonnte API Error: {response.status_code} - {response.text}")

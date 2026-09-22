@@ -25,25 +25,51 @@ def format_for_whatsapp(text: str) -> str:
 
 def upload_image_to_host(image_path: str) -> str:
     """
-    Uploads the image to Catbox to obtain a direct, permanent public URL.
-    Fonnte requires a direct public URL to reliably send media to WhatsApp.
-    Returns None on failure.
+    Uploads the image to a high-speed public CDN (freeimage.host / catbox)
+    to obtain a direct, public image URL required by Fonnte to deliver media to WhatsApp.
     """
+    # 1. Try freeimage.host (Fast global CDN iili.io)
+    try:
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                "https://freeimage.host/api/1/upload",
+                data={
+                    "key": "6d207e02198a847aa98d0a2a901485a5",
+                    "action": "upload",
+                    "format": "json"
+                },
+                files={"source": ("market_card.png", f, "image/png")},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+                timeout=20
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                img_url = data.get("image", {}).get("url")
+                if img_url:
+                    logger.info(f"Successfully uploaded card to freeimage.host: {img_url}")
+                    return img_url
+            logger.warning(f"freeimage.host error: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.warning(f"Exception during freeimage.host upload: {e}")
+
+    # 2. Try Catbox with browser User-Agent
     try:
         with open(image_path, "rb") as f:
             resp = requests.post(
                 "https://catbox.moe/user/api.php",
                 data={"reqtype": "fileupload"},
                 files={"fileToUpload": ("market_card.png", f, "image/png")},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
                 timeout=20
             )
             if resp.status_code == 200 and resp.text.startswith("http"):
-                public_url = resp.text.strip()
-                logger.info(f"Successfully uploaded card to public URL: {public_url}")
-                return public_url
-            logger.warning(f"Failed uploading image to Catbox: {resp.status_code} - {resp.text}")
+                catbox_url = resp.text.strip()
+                logger.info(f"Successfully uploaded card to Catbox: {catbox_url}")
+                return catbox_url
+            logger.warning(f"Catbox upload error: {resp.status_code} - {resp.text}")
     except Exception as e:
-        logger.warning(f"Exception during image upload to Catbox: {e}")
+        logger.warning(f"Exception during Catbox upload: {e}")
+
     return None
 
 @retry(

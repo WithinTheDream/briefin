@@ -7,7 +7,11 @@ logger = logging.getLogger(__name__)
 
 def _summarize_with_gemini(api_key: str, prompt: str) -> str:
     """Summarize using Google Gemini API with support for modern flash models."""
-    models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    models_to_try = [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite"
+    ]
     
     for model_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key.strip()}"

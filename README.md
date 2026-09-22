@@ -64,28 +64,39 @@ flowchart TD
 
 ## ⚙️ Cara Menjalankan Secara Lokal
 
-1. Clone repositori ini:
+1. **Clone repositori**:
    ```bash
    git clone https://github.com/WithinTheDream/briefin.git
    cd briefin
    ```
-2. Buat file `.env` berdasarkan `.env.example` dan isi token Anda:
+2. **Salin file `.env.example` ke `.env` dan isi konfigurasi**:
+   ```bash
+   cp .env.example .env
+   ```
+   Isi API key Anda di `.env`:
    ```env
    SECTORS_API_KEY=your_sectors_api_key
-   FONNTE_TOKEN=your_fonnte_token
+   GEMINI_API_KEY=your_gemini_api_key
+   WA_GATEWAY_URL=http://localhost:3000
    WHATSAPP_TARGET=0812xxxxxxxx
-   TELEGRAM_BOT_TOKEN=...
-   TELEGRAM_CHAT_ID=...
-   GEMINI_API_KEY=...
+   # TELEGRAM_BOT_TOKEN=... (opsional)
+   # TELEGRAM_CHAT_ID=... (opsional)
    ```
-3. Install dependensi:
+
+3. **Jalankan WhatsApp Gateway (Baileys) di terminal pertama**:
+   ```bash
+   cd wa-gateway
+   npm install
+   npm start
+   ```
+   *Pada kali pertama dijalankan, terminal akan menampilkan QR Code. Buka WhatsApp di HP > **Perangkat Tertaut (Linked Devices)** > Scan QR Code tersebut.* Sesi login akan tersimpan otomatis.
+
+4. **Jalankan Briefin di terminal kedua**:
    ```bash
    pip install -r requirements.txt
-   ```
-4. Jalankan script utama:
-   ```bash
    python src/main.py
    ```
+
 
 ---
 

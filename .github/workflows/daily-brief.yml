@@ -1,11 +1,9 @@
 name: Daily Market Brief
 
 on:
-  schedule:
-    # Run at 23:30 UTC (06:30 WIB) every Monday to Friday
-    # 0 = Sunday, 1 = Monday ... 4 = Thursday. Wait, UTC 23:30 on Sunday is Monday 06:30 WIB.
-    # So 0-4 (Sun-Thu in UTC) corresponds to Mon-Fri morning in WIB.
-    - cron: '35 23 * * 0-4'
+  # Schedule disabled while running locally via self-hosted gateway
+  # schedule:
+  #   - cron: '35 23 * * 0-4'
   workflow_dispatch: {}
 
 jobs:

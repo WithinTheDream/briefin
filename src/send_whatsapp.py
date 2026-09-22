@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 FONNTE_API_URL = "https://api.fonnte.com/send"
 
 class WhatsAppError(Exception):
-    """Custom exception for WhatsApp / Fonnte errors."""
+    """Custom exception for WhatsApp / Gateway / Fonnte errors."""
     pass
 
 def format_for_whatsapp(text: str) -> str:
@@ -72,6 +72,96 @@ def upload_image_to_host(image_path: str) -> str:
 
     return None
 
+def _send_via_gateway(gateway_url: str, target: str, message_text: str, image_path: str = None) -> dict:
+    """
+    Sends message + image to the local or self-hosted Baileys WhatsApp Gateway.
+    Supports comma-separated targets and sends HD local images without CDN dependency.
+    """
+    url = f"{gateway_url.rstrip('/')}/send"
+    wa_message = format_for_whatsapp(message_text)
+    payload = {
+        "target": target.strip(),
+        "message": wa_message
+    }
+    if image_path and os.path.exists(image_path):
+        payload["image_path"] = os.path.abspath(image_path)
+        logger.info(f"Sending image + message to WhatsApp target {target} via Gateway ({url})...")
+    else:
+        logger.info(f"Sending message to WhatsApp target {target} via Gateway ({url})...")
+
+    try:
+        response = requests.post(url, json=payload, timeout=60)
+    except requests.RequestException as e:
+        logger.error(f"Failed to connect to WhatsApp Gateway at {url}: {e}")
+        raise WhatsAppError(f"WhatsApp Gateway connection failed: {e}")
+
+    if response.status_code != 200:
+        logger.error(f"WhatsApp Gateway Error [{response.status_code}]: {response.text}")
+        raise WhatsAppError(f"WhatsApp Gateway error ({response.status_code}): {response.text}")
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {"status": True, "raw_response": response.text}
+
+    if isinstance(data, dict) and data.get("status") is False:
+        err = data.get("error", "Unknown gateway error")
+        logger.error(f"WhatsApp Gateway delivery failed: {err}")
+        raise WhatsAppError(f"WhatsApp Gateway error: {err}")
+
+    logger.info("Message successfully sent via WhatsApp Gateway.")
+    return data
+
+def _send_via_fonnte(fonnte_token: str, target: str, message_text: str, image_path: str = None) -> dict:
+    """
+    Fallback method: Sends WhatsApp message via Fonnte API.
+    """
+    headers = {
+        "Authorization": fonnte_token.strip()
+    }
+    wa_message = format_for_whatsapp(message_text)
+    payload = {
+        "target": target.strip(),
+        "message": wa_message,
+        "countryCode": "62"
+    }
+
+    if image_path and os.path.exists(image_path):
+        public_url = upload_image_to_host(image_path)
+        if public_url:
+            payload["url"] = public_url
+            payload["filename"] = "market_card.png"
+            logger.info(f"Sending image via public URL to WhatsApp target {target} via Fonnte...")
+            response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=20)
+        else:
+            logger.info(f"Sending local image file to WhatsApp target {target} via Fonnte...")
+            with open(image_path, "rb") as f:
+                files = {"file": ("market_card.png", f, "image/png")}
+                payload["filename"] = "market_card.png"
+                response = requests.post(FONNTE_API_URL, headers=headers, data=payload, files=files, timeout=30)
+    else:
+        logger.info(f"Sending message to WhatsApp target {target} via Fonnte...")
+        response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=15)
+
+    logger.info(f"Fonnte response [{response.status_code}]: {response.text}")
+
+    if response.status_code != 200:
+        logger.error(f"Fonnte API Error: {response.status_code} - {response.text}")
+        raise WhatsAppError(f"Failed to send WhatsApp message: {response.text}")
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {"status": True, "raw_response": response.text}
+
+    if isinstance(data, dict) and data.get("status") is False:
+        reason = data.get("reason", "Unknown Fonnte error")
+        logger.error(f"Fonnte delivery failed: {reason}")
+        raise WhatsAppError(f"Fonnte error: {reason}")
+
+    logger.info("Message successfully sent to WhatsApp via Fonnte.")
+    return data
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -80,69 +170,28 @@ def upload_image_to_host(image_path: str) -> str:
 )
 def send_whatsapp_message(message_text: str, target: str = None, image_path: str = None) -> dict:
     """
-    Sends a WhatsApp message via Fonnte API, with optional image attachment.
+    Sends a WhatsApp message via Self-Hosted Baileys Gateway (if WA_GATEWAY_URL is set)
+    or via Fonnte API (if FONNTE_TOKEN is set), with optional image attachment.
     
     :param message_text: Text message to send (used as caption if image is attached).
     :param target: Optional destination phone number or group ID. 
                    If not provided, uses WHATSAPP_TARGET from env.
     :param image_path: Optional path to an image file to attach.
-    :return: Response JSON from Fonnte.
+    :return: Response JSON from Gateway or Fonnte.
     """
+    gateway_url = os.getenv("WA_GATEWAY_URL")
     fonnte_token = os.getenv("FONNTE_TOKEN")
     whatsapp_target = target or os.getenv("WHATSAPP_TARGET")
     
-    if not fonnte_token or not whatsapp_target:
-        logger.error("WhatsApp credentials missing (FONNTE_TOKEN or WHATSAPP_TARGET).")
-        raise ValueError("Missing WhatsApp credentials.")
+    if not whatsapp_target:
+        logger.error("WhatsApp target missing (WHATSAPP_TARGET).")
+        raise ValueError("Missing WhatsApp credentials: WHATSAPP_TARGET not configured.")
+
+    if not gateway_url and not fonnte_token:
+        logger.error("No WhatsApp provider configured (set WA_GATEWAY_URL or FONNTE_TOKEN).")
+        raise ValueError("Missing WhatsApp credentials. Provide WA_GATEWAY_URL or FONNTE_TOKEN.")
         
-    headers = {
-        "Authorization": fonnte_token.strip()
-    }
-    
-    # Format message for WhatsApp compatibility
-    wa_message = format_for_whatsapp(message_text)
-    
-    payload = {
-        "target": whatsapp_target.strip(),
-        "message": wa_message,
-        "countryCode": "62"
-    }
-    
-    if image_path and os.path.exists(image_path):
-        # 1. First attempt: upload to public host so Fonnte can download via 'url'
-        public_url = upload_image_to_host(image_path)
-        if public_url:
-            payload["url"] = public_url
-            payload["filename"] = "market_card.png"
-            logger.info(f"Sending image via public URL with caption to WhatsApp target {whatsapp_target} via Fonnte...")
-            response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=20)
-        else:
-            # 2. Fallback: local file upload with explicit filename tuple
-            logger.info(f"Sending local image file to WhatsApp target {whatsapp_target} via Fonnte...")
-            with open(image_path, "rb") as f:
-                files = {"file": ("market_card.png", f, "image/png")}
-                payload["filename"] = "market_card.png"
-                response = requests.post(FONNTE_API_URL, headers=headers, data=payload, files=files, timeout=30)
+    if gateway_url:
+        return _send_via_gateway(gateway_url, whatsapp_target, message_text, image_path)
     else:
-        logger.info(f"Sending message to WhatsApp target {whatsapp_target} via Fonnte...")
-        response = requests.post(FONNTE_API_URL, headers=headers, data=payload, timeout=15)
-    
-    logger.info(f"Fonnte response [{response.status_code}]: {response.text}")
-    
-    if response.status_code != 200:
-        logger.error(f"Fonnte API Error: {response.status_code} - {response.text}")
-        raise WhatsAppError(f"Failed to send WhatsApp message: {response.text}")
-        
-    try:
-        data = response.json()
-    except Exception:
-        data = {"status": True, "raw_response": response.text}
-        
-    # Check if Fonnte indicated a failure in their JSON response
-    if isinstance(data, dict) and data.get("status") is False:
-        reason = data.get("reason", "Unknown Fonnte error")
-        logger.error(f"Fonnte delivery failed: {reason}")
-        raise WhatsAppError(f"Fonnte error: {reason}")
-        
-    logger.info("Message successfully sent to WhatsApp.")
-    return data
+        return _send_via_fonnte(fonnte_token, whatsapp_target, message_text, image_path)

@@ -27,13 +27,13 @@ logger = logging.getLogger(__name__)
 
 def dispatch_brief(message_text: str, image_path: str = None):
     """
-    Sends the brief to configured channels (Telegram and/or WhatsApp via Fonnte) with optional image card.
+    Sends the brief to configured channels (Telegram and/or WhatsApp via Gateway / Fonnte) with optional image card.
     """
     telegram_ready = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
-    whatsapp_ready = bool(os.getenv("FONNTE_TOKEN") and os.getenv("WHATSAPP_TARGET"))
+    whatsapp_ready = bool((os.getenv("WA_GATEWAY_URL") or os.getenv("FONNTE_TOKEN")) and os.getenv("WHATSAPP_TARGET"))
     
     if not telegram_ready and not whatsapp_ready:
-        raise ValueError("No notification channels configured! Provide Telegram or WhatsApp (Fonnte) credentials.")
+        raise ValueError("No notification channels configured! Provide Telegram or WhatsApp (WA_GATEWAY_URL / FONNTE_TOKEN) credentials.")
         
     delivery_success = False
     
@@ -47,7 +47,8 @@ def dispatch_brief(message_text: str, image_path: str = None):
             
     if whatsapp_ready:
         try:
-            logger.info("Sending brief to WhatsApp via Fonnte...")
+            channel = "Self-Hosted Gateway" if os.getenv("WA_GATEWAY_URL") else "Fonnte"
+            logger.info(f"Sending brief to WhatsApp via {channel}...")
             send_whatsapp_message(message_text, image_path=image_path)
             delivery_success = True
         except Exception as e:
@@ -61,7 +62,7 @@ def dispatch_error_alert(error_msg: str):
     Sends failure alerts to configured channels if possible.
     """
     telegram_ready = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
-    whatsapp_ready = bool(os.getenv("FONNTE_TOKEN") and os.getenv("WHATSAPP_TARGET"))
+    whatsapp_ready = bool((os.getenv("WA_GATEWAY_URL") or os.getenv("FONNTE_TOKEN")) and os.getenv("WHATSAPP_TARGET"))
     
     if telegram_ready:
         try:

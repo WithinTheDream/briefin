@@ -56,3 +56,42 @@ def test_send_whatsapp_missing_credentials():
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ValueError, match="Missing WhatsApp credentials"):
             send_whatsapp_message("Test message")
+
+@patch('send_whatsapp.requests.post')
+def test_send_whatsapp_gateway_success(mock_post):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"status": True, "message": "Message sent successfully"}
+    mock_post.return_value = mock_response
+    
+    env_vars = {
+        "WA_GATEWAY_URL": "http://localhost:3000",
+        "WHATSAPP_TARGET": "08123456789"
+    }
+    
+    with patch.dict(os.environ, env_vars, clear=True):
+        result = send_whatsapp_message("Test gateway message")
+        
+    assert result["status"] is True
+    assert mock_post.called
+    assert mock_post.call_args[0][0] == "http://localhost:3000/send"
+    json_data = mock_post.call_args[1]["json"]
+    assert json_data["target"] == "08123456789"
+    assert json_data["message"] == "Test gateway message"
+
+@patch('send_whatsapp.requests.post')
+def test_send_whatsapp_gateway_failure(mock_post):
+    mock_response = MagicMock()
+    mock_response.status_code = 503
+    mock_response.text = "Service Unavailable"
+    mock_post.return_value = mock_response
+    
+    env_vars = {
+        "WA_GATEWAY_URL": "http://localhost:3000",
+        "WHATSAPP_TARGET": "08123456789"
+    }
+    
+    with patch.dict(os.environ, env_vars, clear=True):
+        with pytest.raises(WhatsAppError):
+            send_whatsapp_message("Test message")
+

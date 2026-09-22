@@ -1,0 +1,15 @@
+{
+  "name": "briefin-wa-gateway",
+  "version": "1.0.0",
+  "description": "Lightweight self-hosted WhatsApp Gateway using Baileys for Briefin",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "express": "^4.19.2",
+    "pino": "^9.2.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

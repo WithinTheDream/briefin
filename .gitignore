@@ -4,3 +4,6 @@ __pycache__/
 .env
 logs/
 .pytest_cache/
+wa-gateway/node_modules/
+wa-gateway/auth_session/
+

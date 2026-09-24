@@ -95,3 +95,52 @@ def test_send_whatsapp_gateway_failure(mock_post):
         with pytest.raises(WhatsAppError):
             send_whatsapp_message("Test message")
 
+@patch('send_whatsapp.requests.get')
+def test_get_registered_subscribers(mock_get):
+    from send_whatsapp import get_registered_subscribers
+    mock_res = MagicMock()
+    mock_res.status_code = 200
+    mock_res.json.return_value = {"status": True, "count": 2, "subscribers": ["6281111111", "6282222222"]}
+    mock_get.return_value = mock_res
+
+    subs = get_registered_subscribers("http://localhost:3000")
+    assert len(subs) == 2
+    assert "6281111111" in subs
+    assert "6282222222" in subs
+
+@patch('send_whatsapp.requests.post')
+@patch('send_whatsapp.requests.get')
+def test_send_whatsapp_broadcast_multiple_subscribers(mock_get, mock_post):
+    mock_get_res = MagicMock()
+    mock_get_res.status_code = 200
+    mock_get_res.json.return_value = {
+        "status": True,
+        "count": 2,
+        "subscribers": ["6281111111@s.whatsapp.net", "6282222222@s.whatsapp.net"]
+    }
+    mock_get.return_value = mock_get_res
+
+    mock_post_res = MagicMock()
+    mock_post_res.status_code = 200
+    mock_post_res.json.return_value = {"status": True, "results": []}
+    mock_post.return_value = mock_post_res
+
+    env_vars = {
+        "WA_GATEWAY_URL": "http://localhost:3000",
+        "WHATSAPP_TARGET": "08123456789"
+    }
+
+    with patch.dict(os.environ, env_vars, clear=True):
+        result = send_whatsapp_message("Broadcast message")
+
+    assert result["status"] is True
+    assert mock_post.called
+    json_data = mock_post.call_args[1]["json"]
+    # Check that both subscribers and the admin target are included
+    assert isinstance(json_data["target"], list)
+    assert len(json_data["target"]) == 3
+    assert "6281111111@s.whatsapp.net" in json_data["target"]
+    assert "6282222222@s.whatsapp.net" in json_data["target"]
+    assert "08123456789" in json_data["target"]
+
+

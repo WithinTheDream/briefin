@@ -13,6 +13,33 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const AUTH_DIR = path.join(__dirname, 'auth_session');
+const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
+
+function loadSubscribers() {
+    try {
+        if (!fs.existsSync(SUBSCRIBERS_FILE)) {
+            fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify([], null, 2));
+            return [];
+        }
+        const data = fs.readFileSync(SUBSCRIBERS_FILE, 'utf8');
+        const parsed = JSON.parse(data);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+        console.error('[WA-GATEWAY] Gagal membaca subscribers.json:', err.message);
+        return [];
+    }
+}
+
+function saveSubscribers(list) {
+    try {
+        const unique = Array.from(new Set(list.filter(Boolean)));
+        fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify(unique, null, 2));
+        return true;
+    } catch (err) {
+        console.error('[WA-GATEWAY] Gagal menyimpan subscribers.json:', err.message);
+        return false;
+    }
+}
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -140,6 +167,61 @@ async function connectToWhatsApp() {
             console.log('======================================================\n');
         }
     });
+
+    // Listen for incoming messages for subscriber registration (!daftar, !batal, !info)
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify' && type !== 'append') return;
+        for (const msg of messages) {
+            // Ignore messages from myself or status broadcasts
+            if (!msg.message || msg.key.fromMe) continue;
+            const senderJid = msg.key.remoteJid;
+            if (!senderJid || senderJid.endsWith('@broadcast') || senderJid.endsWith('@newsletter')) continue;
+
+            const text = (
+                msg.message?.conversation ||
+                msg.message?.extendedTextMessage?.text ||
+                msg.message?.imageMessage?.caption ||
+                ''
+            ).trim().toLowerCase();
+
+            if (!text) continue;
+
+            const formattedSender = formatJid(senderJid);
+            if (!formattedSender) continue;
+
+            const subscribers = loadSubscribers();
+            const isRegistered = subscribers.includes(formattedSender);
+
+            try {
+                if (['!daftar', 'daftar', '/daftar', '/start', '!regist', 'regist', '!subscribe', 'subscribe'].includes(text)) {
+                    if (!isRegistered) {
+                        subscribers.push(formattedSender);
+                        saveSubscribers(subscribers);
+                        console.log(`[WA-GATEWAY] ➕ Subscriber baru terdaftar: ${formattedSender}`);
+                    }
+                    await sock.sendMessage(senderJid, {
+                        text: `📈 *Selamat datang di Briefin!*\n\nNomor kamu berhasil terdaftar. Kamu akan otomatis menerima analisis harian pasar saham IDX (IHSG, top movers, market cap) & kartu infografis setiap pagi hari bursa (Senin–Jumat pukul 06:30 WIB).\n\n• Ketik *!info* untuk cek status langganan\n• Ketik *!batal* untuk berhenti berlangganan`
+                    });
+                } else if (['!batal', 'batal', '/stop', '!stop', '!unsub', 'unsub', '!unsubscribe'].includes(text)) {
+                    if (isRegistered) {
+                        const updated = subscribers.filter(s => s !== formattedSender);
+                        saveSubscribers(updated);
+                        console.log(`[WA-GATEWAY] ➖ Subscriber berhenti: ${formattedSender}`);
+                    }
+                    await sock.sendMessage(senderJid, {
+                        text: `👋 *Berhenti Berlangganan*\n\nKamu telah berhenti berlangganan Briefin. Kamu tidak akan menerima brief harian lagi.\n\nKetik *!daftar* kapan saja jika ingin bergabung kembali!`
+                    });
+                } else if (['!info', 'info', '!help', 'help', 'menu', '!menu'].includes(text)) {
+                    const statusText = isRegistered ? '✅ Terdaftar (Aktif)' : '❌ Belum Terdaftar';
+                    await sock.sendMessage(senderJid, {
+                        text: `📊 *Briefin • Market Assistant*\n\nStatus kamu: *${statusText}*\n\nBriefin mengirimkan ringkasan pasar saham IDX harian dan infografis setiap pagi hari bursa secara otomatis.\n\n*Perintah yang tersedia:*\n• *!daftar* - Berlangganan brief harian\n• *!batal* - Berhenti berlangganan\n• *!info* - Cek status langganan kamu`
+                    });
+                }
+            } catch (replyErr) {
+                console.error(`[WA-GATEWAY] Gagal membalas pesan ke ${senderJid}:`, replyErr.message);
+            }
+        }
+    });
 }
 
 // Friendly landing page for browser testing
@@ -179,6 +261,48 @@ app.get('/status', (req, res) => {
     res.json({
         status: connectionStatus,
         connected: connectionStatus === 'connected'
+    });
+});
+
+// Get all registered subscribers
+app.get('/subscribers', (req, res) => {
+    const subscribers = loadSubscribers();
+    res.json({
+        status: true,
+        count: subscribers.length,
+        subscribers
+    });
+});
+
+// Manage subscribers (add or remove manually via API)
+app.post('/subscribers', (req, res) => {
+    const { action, target } = req.body;
+    if (!target) {
+        return res.status(400).json({ status: false, error: 'Parameter "target" diperlukan.' });
+    }
+    const jids = parseTargets(target);
+    if (jids.length === 0) {
+        return res.status(400).json({ status: false, error: 'Format target tidak valid.' });
+    }
+
+    let subscribers = loadSubscribers();
+    if (action === 'remove') {
+        subscribers = subscribers.filter(s => !jids.includes(s));
+    } else {
+        // default: add
+        for (const jid of jids) {
+            if (!subscribers.includes(jid)) {
+                subscribers.push(jid);
+            }
+        }
+    }
+    saveSubscribers(subscribers);
+
+    res.json({
+        status: true,
+        action: action === 'remove' ? 'removed' : 'added',
+        count: subscribers.length,
+        subscribers
     });
 });
 

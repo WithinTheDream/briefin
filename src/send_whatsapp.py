@@ -72,22 +72,31 @@ def upload_image_to_host(image_path: str) -> str:
 
     return None
 
-def _send_via_gateway(gateway_url: str, target: str, message_text: str, image_path: str = None) -> dict:
+def _send_via_gateway(gateway_url: str, target, message_text: str, image_path: str = None) -> dict:
     """
     Sends message + image to the local or self-hosted Baileys WhatsApp Gateway.
-    Supports comma-separated targets and sends HD local images without CDN dependency.
+    Supports single target or list of targets, and sends HD local images without CDN dependency.
     """
     url = f"{gateway_url.rstrip('/')}/send"
     wa_message = format_for_whatsapp(message_text)
+    
+    if isinstance(target, list):
+        if len(target) == 1:
+            target_payload = str(target[0]).strip()
+        else:
+            target_payload = [str(t).strip() for t in target if t]
+    else:
+        target_payload = str(target).strip()
+
     payload = {
-        "target": target.strip(),
+        "target": target_payload,
         "message": wa_message
     }
     if image_path and os.path.exists(image_path):
         payload["image_path"] = os.path.abspath(image_path)
-        logger.info(f"Sending image + message to WhatsApp target {target} via Gateway ({url})...")
+        logger.info(f"Sending image + message to WhatsApp target {target_payload} via Gateway ({url})...")
     else:
-        logger.info(f"Sending message to WhatsApp target {target} via Gateway ({url})...")
+        logger.info(f"Sending message to WhatsApp target {target_payload} via Gateway ({url})...")
 
     try:
         response = requests.post(url, json=payload, timeout=60)
@@ -162,6 +171,21 @@ def _send_via_fonnte(fonnte_token: str, target: str, message_text: str, image_pa
     logger.info("Message successfully sent to WhatsApp via Fonnte.")
     return data
 
+def get_registered_subscribers(gateway_url: str) -> list[str]:
+    """
+    Fetches the list of active subscribers registered via WhatsApp Gateway.
+    Returns empty list if gateway is unreachable or no subscribers exist.
+    """
+    try:
+        url = f"{gateway_url.rstrip('/')}/subscribers"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("subscribers", [])
+    except Exception as err:
+        logger.warning(f"Could not fetch subscribers from gateway: {err}")
+    return []
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -173,25 +197,45 @@ def send_whatsapp_message(message_text: str, target: str = None, image_path: str
     Sends a WhatsApp message via Self-Hosted Baileys Gateway (if WA_GATEWAY_URL is set)
     or via Fonnte API (if FONNTE_TOKEN is set), with optional image attachment.
     
+    If target is not specified and using Baileys Gateway, it broadcasts to all 
+    registered subscribers (from GET /subscribers) plus WHATSAPP_TARGET from .env.
+    
     :param message_text: Text message to send (used as caption if image is attached).
     :param target: Optional destination phone number or group ID. 
-                   If not provided, uses WHATSAPP_TARGET from env.
+                   If not provided, broadcasts to all registered subscribers.
     :param image_path: Optional path to an image file to attach.
     :return: Response JSON from Gateway or Fonnte.
     """
     gateway_url = os.getenv("WA_GATEWAY_URL")
     fonnte_token = os.getenv("FONNTE_TOKEN")
-    whatsapp_target = target or os.getenv("WHATSAPP_TARGET")
+    admin_target = os.getenv("WHATSAPP_TARGET")
     
-    if not whatsapp_target:
-        logger.error("WhatsApp target missing (WHATSAPP_TARGET).")
-        raise ValueError("Missing WhatsApp credentials: WHATSAPP_TARGET not configured.")
-
     if not gateway_url and not fonnte_token:
         logger.error("No WhatsApp provider configured (set WA_GATEWAY_URL or FONNTE_TOKEN).")
         raise ValueError("Missing WhatsApp credentials. Provide WA_GATEWAY_URL or FONNTE_TOKEN.")
         
     if gateway_url:
-        return _send_via_gateway(gateway_url, whatsapp_target, message_text, image_path)
+        targets_to_send = []
+        if target:
+            targets_to_send.append(target)
+        else:
+            # Broadcast to all registered subscribers + default admin target
+            subscribers = get_registered_subscribers(gateway_url)
+            for sub in subscribers:
+                if sub and sub not in targets_to_send:
+                    targets_to_send.append(sub)
+                    
+            if admin_target and admin_target not in targets_to_send:
+                targets_to_send.append(admin_target)
+
+        if not targets_to_send:
+            logger.error("No WhatsApp recipients found (no subscribers and WHATSAPP_TARGET empty).")
+            raise ValueError("Missing WhatsApp credentials: No recipients available.")
+
+        logger.info(f"Dispatching WhatsApp message to {len(targets_to_send)} recipient(s): {targets_to_send}")
+        return _send_via_gateway(gateway_url, targets_to_send, message_text, image_path)
     else:
-        return _send_via_fonnte(fonnte_token, whatsapp_target, message_text, image_path)
+        destination = target or admin_target
+        if not destination:
+            raise ValueError("Missing WhatsApp credentials: WHATSAPP_TARGET not configured.")
+        return _send_via_fonnte(fonnte_token, destination, message_text, image_path)

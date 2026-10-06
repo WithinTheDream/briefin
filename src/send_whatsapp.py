@@ -23,6 +23,26 @@ def format_for_whatsapp(text: str) -> str:
     formatted = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
     return formatted
 
+def normalize_target_jid(target: str) -> str:
+    """
+    Normalizes a destination phone number or JID to standard WhatsApp JID format.
+    Ensures uniform comparison between e.g. '089681560551' and '6289681560551@s.whatsapp.net'.
+    Supports @s.whatsapp.net, @lid, and @g.us.
+    """
+    if not target:
+        return ""
+    clean = str(target).strip()
+    if clean.endswith("@g.us") or clean.endswith("@s.whatsapp.net") or clean.endswith("@lid"):
+        return clean
+    digits = re.sub(r'[^0-9]', '', clean)
+    if digits.startswith("0"):
+        digits = "62" + digits[1:]
+    elif digits.startswith("8"):
+        digits = "62" + digits
+    if len(digits) >= 7:
+        return f"{digits}@s.whatsapp.net"
+    return clean
+
 def upload_image_to_host(image_path: str) -> str:
     """
     Uploads the image to a high-speed public CDN (freeimage.host / catbox)
@@ -217,16 +237,21 @@ def send_whatsapp_message(message_text: str, target: str = None, image_path: str
     if gateway_url:
         targets_to_send = []
         if target:
-            targets_to_send.append(target)
+            norm_target = normalize_target_jid(target)
+            if norm_target:
+                targets_to_send.append(norm_target)
         else:
-            # Broadcast to all registered subscribers + default admin target
+            # Broadcast to all registered subscribers + default admin target (without duplication)
             subscribers = get_registered_subscribers(gateway_url)
             for sub in subscribers:
-                if sub and sub not in targets_to_send:
-                    targets_to_send.append(sub)
+                norm_sub = normalize_target_jid(sub)
+                if norm_sub and norm_sub not in targets_to_send:
+                    targets_to_send.append(norm_sub)
                     
-            if admin_target and admin_target not in targets_to_send:
-                targets_to_send.append(admin_target)
+            if admin_target:
+                norm_admin = normalize_target_jid(admin_target)
+                if norm_admin and norm_admin not in targets_to_send:
+                    targets_to_send.append(norm_admin)
 
         if not targets_to_send:
             logger.error("No WhatsApp recipients found (no subscribers and WHATSAPP_TARGET empty).")

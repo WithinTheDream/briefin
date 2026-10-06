@@ -30,7 +30,7 @@ def dispatch_brief(message_text: str, image_path: str = None):
     Sends the brief to configured channels (Telegram and/or WhatsApp via Gateway / Fonnte) with optional image card.
     """
     telegram_ready = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
-    whatsapp_ready = bool((os.getenv("WA_GATEWAY_URL") or os.getenv("FONNTE_TOKEN")) and os.getenv("WHATSAPP_TARGET"))
+    whatsapp_ready = bool(os.getenv("WA_GATEWAY_URL") or (os.getenv("FONNTE_TOKEN") and os.getenv("WHATSAPP_TARGET")))
     
     if not telegram_ready and not whatsapp_ready:
         raise ValueError("No notification channels configured! Provide Telegram or WhatsApp (WA_GATEWAY_URL / FONNTE_TOKEN) credentials.")
@@ -62,7 +62,7 @@ def dispatch_error_alert(error_msg: str):
     Sends failure alerts to configured channels if possible.
     """
     telegram_ready = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
-    whatsapp_ready = bool((os.getenv("WA_GATEWAY_URL") or os.getenv("FONNTE_TOKEN")) and os.getenv("WHATSAPP_TARGET"))
+    whatsapp_ready = bool(os.getenv("WA_GATEWAY_URL") or (os.getenv("FONNTE_TOKEN") and os.getenv("WHATSAPP_TARGET")))
     
     if telegram_ready:
         try:

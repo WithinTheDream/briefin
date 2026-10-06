@@ -12,16 +12,22 @@ console.info = function (...args) {
 };
 
 const express = require('express');
-const { 
-    default: makeWASocket, 
-    DisconnectReason, 
-    useMultiFileAuthState, 
-    fetchLatestBaileysVersion 
+const {
+    default: makeWASocket,
+    DisconnectReason,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const path = require('path');
 const fs = require('fs');
+const {
+    getActiveSubscribers,
+    isSubscribed,
+    addSubscriber,
+    removeSubscriber
+} = require('./db');
 
 const {
     getActiveSubscribers,
@@ -51,12 +57,12 @@ let connectionStatus = 'initializing'; // 'initializing', 'qr_ready', 'connected
 function formatJid(target) {
     if (!target) return null;
     let clean = target.toString().trim();
-    
+
     // Group JID: e.g. 120363028192839123@g.us or 628815877681-1590807322@g.us
     if (clean.endsWith('@g.us')) {
         return clean.replace(/\s+/g, '');
     }
-    
+
     // User JID: already has @s.whatsapp.net
     if (clean.endsWith('@s.whatsapp.net')) {
         return clean.replace(/\s+/g, '');
@@ -74,7 +80,7 @@ function formatJid(target) {
     } else if (clean.startsWith('8')) {
         clean = '62' + clean;
     }
-    
+
     if (!clean || clean.length < 7) return null;
     return `${clean}@s.whatsapp.net`;
 }
@@ -346,9 +352,9 @@ app.post('/send', async (req, res) => {
     }
 
     if (connectionStatus !== 'connected' || !sock) {
-        return res.status(503).json({ 
-            status: false, 
-            error: `WhatsApp belum terhubung (Status saat ini: ${connectionStatus}). Silakan scan QR code terlebih dahulu.` 
+        return res.status(503).json({
+            status: false,
+            error: `WhatsApp belum terhubung (Status saat ini: ${connectionStatus}). Silakan scan QR code terlebih dahulu.`
         });
     }
 

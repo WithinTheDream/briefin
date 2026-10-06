@@ -1,3 +1,16 @@
+// Intercept noisy internal libsignal session dumps before anything else
+const originalConsoleInfo = console.info;
+console.info = function (...args) {
+    if (typeof args[0] === 'string' && (
+        args[0].startsWith('Closing session:') ||
+        args[0].startsWith('Removing old closed session:') ||
+        args[0].startsWith('Decrypted message with closed session')
+    )) {
+        return;
+    }
+    originalConsoleInfo.apply(console, args);
+};
+
 const express = require('express');
 const {
     default: makeWASocket,
@@ -16,6 +29,13 @@ const {
     removeSubscriber
 } = require('./db');
 
+const {
+    getActiveSubscribers,
+    isSubscribed,
+    addSubscriber,
+    removeSubscriber
+} = require('./db');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const AUTH_DIR = path.join(__dirname, 'auth_session');
@@ -26,6 +46,14 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 let sock = null;
 let connectionStatus = 'initializing'; // 'initializing', 'qr_ready', 'connected', 'disconnected'
 
+/**
+ * Normalizes any WhatsApp identifier into a valid Baileys JID format.
+ * Supports:
+ * - Group JID (@g.us)
+ * - User phone number JID (@s.whatsapp.net)
+ * - WhatsApp Linked Identity JID (@lid)
+ * - Raw phone numbers (e.g. 0812..., 62812..., +62812...)
+ */
 function formatJid(target) {
     if (!target) return null;
     let clean = target.toString().trim();
@@ -37,6 +65,11 @@ function formatJid(target) {
 
     // User JID: already has @s.whatsapp.net
     if (clean.endsWith('@s.whatsapp.net')) {
+        return clean.replace(/\s+/g, '');
+    }
+
+    // User LID: WhatsApp Linked Identity (e.g. 154459992793290@lid)
+    if (clean.endsWith('@lid')) {
         return clean.replace(/\s+/g, '');
     }
 
@@ -52,6 +85,10 @@ function formatJid(target) {
     return `${clean}@s.whatsapp.net`;
 }
 
+/**
+ * Parses and deduplicates target inputs (string, list, comma-separated, phone numbers, or JIDs).
+ * Guarantees no duplicated targets in the returned array.
+ */
 function parseTargets(input) {
     if (!input) return [];
     if (Array.isArray(input)) {
@@ -64,17 +101,18 @@ function parseTargets(input) {
                 }
             }
         }
-        return flattened;
+        return Array.from(new Set(flattened));
     }
 
     const str = input.toString().trim();
     const results = [];
 
-    // 1. Extract JIDs (e.g. ...@g.us, ...@s.whatsapp.net)
-    const jidMatches = str.match(/[\w\-]+@(g\.us|s\.whatsapp\.net)/g) || [];
+    // 1. Extract JIDs (e.g. ...@g.us, ...@s.whatsapp.net, ...@lid)
+    const jidMatches = str.match(/[\w\-]+@(g\.us|s\.whatsapp\.net|lid)/g) || [];
     for (const jid of jidMatches) {
-        if (!results.includes(jid)) {
-            results.push(jid);
+        const formatted = formatJid(jid);
+        if (formatted && !results.includes(formatted)) {
+            results.push(formatted);
         }
     }
 
@@ -84,7 +122,7 @@ function parseTargets(input) {
         remaining = remaining.replace(jid, ' ');
     }
 
-    // 3. Extract phone numbers (handles 08..., 628..., +628...) regardless of comma, dot, or space separators
+    // 3. Extract phone numbers (handles 08..., 628..., +628...)
     const phoneMatches = remaining.match(/(?:\+?62|0)[0-9]{8,14}/g) || [];
     for (const phone of phoneMatches) {
         const formatted = formatJid(phone);
@@ -93,7 +131,7 @@ function parseTargets(input) {
         }
     }
 
-    // 4. Fallback: if regex didn't catch, try splitting by comma, semicolon, space, newline
+    // 4. Fallback: split by delimiters
     if (results.length === 0) {
         const items = str.split(/[,;\s\n]+/).map(t => t.trim()).filter(Boolean);
         for (const it of items) {
@@ -104,10 +142,16 @@ function parseTargets(input) {
         }
     }
 
-    return results;
+    return Array.from(new Set(results));
 }
 
 async function connectToWhatsApp() {
+    if (sock) {
+        try {
+            sock.ev.removeAllListeners();
+        } catch (_) {}
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -177,13 +221,23 @@ async function connectToWhatsApp() {
             const formattedSender = formatJid(senderJid);
             if (!formattedSender) continue;
 
+            // Detect phone number if available from sender, remoteJidAlt, or participant
+            let detectedPhone = null;
+            if (senderJid && senderJid.endsWith('@s.whatsapp.net')) {
+                detectedPhone = senderJid.split('@')[0].replace(/[^0-9]/g, '');
+            } else if (msg.key.remoteJidAlt && msg.key.remoteJidAlt.endsWith('@s.whatsapp.net')) {
+                detectedPhone = msg.key.remoteJidAlt.split('@')[0].replace(/[^0-9]/g, '');
+            } else if (msg.key.participant && msg.key.participant.endsWith('@s.whatsapp.net')) {
+                detectedPhone = msg.key.participant.split('@')[0].replace(/[^0-9]/g, '');
+            }
+
             const registered = await isSubscribed(formattedSender);
 
             try {
                 if (['!daftar', 'daftar', '/daftar', '/start', '!regist', 'regist', '!subscribe', 'subscribe'].includes(text)) {
                     if (!registered) {
-                        await addSubscriber(formattedSender);
-                        console.log(`[WA-GATEWAY] ➕ Subscriber baru terdaftar di Supabase: ${formattedSender}`);
+                        await addSubscriber(formattedSender, detectedPhone);
+                        console.log(`[WA-GATEWAY] ➕ Subscriber baru terdaftar: ${formattedSender}`);
                     }
                     await sock.sendMessage(senderJid, {
                         text: `📈 *Selamat datang di Briefin!*\n\nNomor kamu berhasil terdaftar. Kamu akan otomatis menerima analisis harian pasar saham IDX (IHSG, top movers, market cap) & kartu infografis setiap pagi hari bursa (Senin–Jumat pukul 06:30 WIB).\n\n• Ketik *!info* untuk cek status langganan\n• Ketik *!batal* untuk berhenti berlangganan`
@@ -191,7 +245,7 @@ async function connectToWhatsApp() {
                 } else if (['!batal', 'batal', '/stop', '!stop', '!unsub', 'unsub', '!unsubscribe'].includes(text)) {
                     if (registered) {
                         await removeSubscriber(formattedSender);
-                        console.log(`[WA-GATEWAY] ➖ Subscriber dinonaktifkan di Supabase: ${formattedSender}`);
+                        console.log(`[WA-GATEWAY] ➖ Subscriber berhenti: ${formattedSender}`);
                     }
                     await sock.sendMessage(senderJid, {
                         text: `👋 *Berhenti Berlangganan*\n\nKamu telah berhenti berlangganan Briefin. Kamu tidak akan menerima brief harian lagi.\n\nKetik *!daftar* kapan saja jika ingin bergabung kembali!`
@@ -249,7 +303,7 @@ app.get('/status', (req, res) => {
     });
 });
 
-// Get all registered subscribers from Supabase
+// Get all registered subscribers from Supabase (with local json fallback)
 app.get('/subscribers', async (req, res) => {
     const subscribers = await getActiveSubscribers();
     res.json({
@@ -289,7 +343,7 @@ app.post('/subscribers', async (req, res) => {
     });
 });
 
-// Send message endpoint (supports group JID + individual numbers with commas, dots, spaces)
+// Send message endpoint (supports group JID, LID, and phone numbers with deduplication)
 app.post('/send', async (req, res) => {
     const { target, message, image_path } = req.body;
 
@@ -319,12 +373,14 @@ app.post('/send', async (req, res) => {
     }
 
     const results = [];
-    console.log(`[WA-GATEWAY] Memproses pengiriman ke ${jids.length} target:\n  - ${jids.join('\n  - ')}`);
+    console.log(`[WA-GATEWAY] Memproses pengiriman ke ${jids.length} target unik:\n  - ${jids.join('\n  - ')}`);
 
     for (const jid of jids) {
         let destJid = jid;
 
-        // If personal number, verify with WhatsApp server
+        // If personal phone number, verify with WhatsApp server.
+        // NOTE: JIDs ending in @lid or @g.us must NOT be checked with sock.onWhatsApp()
+        // because onWhatsApp only checks regular MSISDN phone numbers.
         if (destJid.endsWith('@s.whatsapp.net')) {
             try {
                 const checkResults = await sock.onWhatsApp(destJid);

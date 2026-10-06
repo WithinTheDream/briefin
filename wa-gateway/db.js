@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
-require('dotenv').config(); // also check current dir if any
+require('dotenv').config(); // also check current directory if any
 
 const { createClient } = require('@supabase/supabase-js');
 
@@ -13,7 +13,7 @@ let supabase = null;
 if (SUPABASE_URL && SUPABASE_KEY) {
     try {
         supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-        console.log('[DB] Supabase client initialized.');
+        console.log('[DB] Supabase client berhasil diinisialisasi.');
     } catch (err) {
         console.error('[DB] Gagal inisialisasi Supabase client:', err.message);
     }
@@ -49,14 +49,14 @@ function saveLocalSubscribers(list) {
 }
 
 function extractPhoneFromJid(jid) {
-    if (!jid) return '';
-    const clean = jid.split('@')[0].replace(/[^0-9]/g, '');
-    return clean;
+    if (!jid) return 'unknown';
+    const digits = jid.split('@')[0].replace(/[^0-9]/g, '');
+    return digits || 'unknown';
 }
 
 /**
  * Mendapatkan seluruh JID subscriber yang aktif (is_active = true)
- * @returns {Promise<string[]>} List of JIDs
+ * @returns {Promise<string[]>} List of active JIDs
  */
 async function getActiveSubscribers() {
     if (supabase) {
@@ -131,17 +131,16 @@ async function addSubscriber(jid, phone = null) {
 
     if (supabase) {
         try {
+            const payload = {
+                jid: jid,
+                phone: finalPhone || 'unknown',
+                is_active: true,
+                updated_at: new Date().toISOString()
+            };
+
             const { error } = await supabase
                 .from('subscribers')
-                .upsert(
-                    {
-                        jid: jid,
-                        phone: finalPhone,
-                        is_active: true,
-                        updated_at: new Date().toISOString()
-                    },
-                    { onConflict: 'jid' }
-                );
+                .upsert(payload, { onConflict: 'jid' });
 
             if (error) {
                 console.error('[DB] Supabase error addSubscriber:', error.message);
@@ -199,5 +198,6 @@ module.exports = {
     addSubscriber,
     removeSubscriber,
     readLocalSubscribers,
-    saveLocalSubscribers
+    saveLocalSubscribers,
+    extractPhoneFromJid
 };

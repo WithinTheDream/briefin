@@ -1,45 +1,24 @@
 const express = require('express');
-const { 
-    default: makeWASocket, 
-    DisconnectReason, 
-    useMultiFileAuthState, 
-    fetchLatestBaileysVersion 
+const {
+    default: makeWASocket,
+    DisconnectReason,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const path = require('path');
 const fs = require('fs');
+const {
+    getActiveSubscribers,
+    isSubscribed,
+    addSubscriber,
+    removeSubscriber
+} = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const AUTH_DIR = path.join(__dirname, 'auth_session');
-const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
-
-function loadSubscribers() {
-    try {
-        if (!fs.existsSync(SUBSCRIBERS_FILE)) {
-            fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify([], null, 2));
-            return [];
-        }
-        const data = fs.readFileSync(SUBSCRIBERS_FILE, 'utf8');
-        const parsed = JSON.parse(data);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch (err) {
-        console.error('[WA-GATEWAY] Gagal membaca subscribers.json:', err.message);
-        return [];
-    }
-}
-
-function saveSubscribers(list) {
-    try {
-        const unique = Array.from(new Set(list.filter(Boolean)));
-        fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify(unique, null, 2));
-        return true;
-    } catch (err) {
-        console.error('[WA-GATEWAY] Gagal menyimpan subscribers.json:', err.message);
-        return false;
-    }
-}
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -50,12 +29,12 @@ let connectionStatus = 'initializing'; // 'initializing', 'qr_ready', 'connected
 function formatJid(target) {
     if (!target) return null;
     let clean = target.toString().trim();
-    
+
     // Group JID: e.g. 120363028192839123@g.us or 628815877681-1590807322@g.us
     if (clean.endsWith('@g.us')) {
         return clean.replace(/\s+/g, '');
     }
-    
+
     // User JID: already has @s.whatsapp.net
     if (clean.endsWith('@s.whatsapp.net')) {
         return clean.replace(/\s+/g, '');
@@ -68,7 +47,7 @@ function formatJid(target) {
     } else if (clean.startsWith('8')) {
         clean = '62' + clean;
     }
-    
+
     if (!clean || clean.length < 7) return null;
     return `${clean}@s.whatsapp.net`;
 }
@@ -76,7 +55,16 @@ function formatJid(target) {
 function parseTargets(input) {
     if (!input) return [];
     if (Array.isArray(input)) {
-        return input.map(formatJid).filter(Boolean);
+        const flattened = [];
+        for (const item of input) {
+            const parsed = parseTargets(item);
+            for (const p of parsed) {
+                if (!flattened.includes(p)) {
+                    flattened.push(p);
+                }
+            }
+        }
+        return flattened;
     }
 
     const str = input.toString().trim();
@@ -189,30 +177,27 @@ async function connectToWhatsApp() {
             const formattedSender = formatJid(senderJid);
             if (!formattedSender) continue;
 
-            const subscribers = loadSubscribers();
-            const isRegistered = subscribers.includes(formattedSender);
+            const registered = await isSubscribed(formattedSender);
 
             try {
                 if (['!daftar', 'daftar', '/daftar', '/start', '!regist', 'regist', '!subscribe', 'subscribe'].includes(text)) {
-                    if (!isRegistered) {
-                        subscribers.push(formattedSender);
-                        saveSubscribers(subscribers);
-                        console.log(`[WA-GATEWAY] ➕ Subscriber baru terdaftar: ${formattedSender}`);
+                    if (!registered) {
+                        await addSubscriber(formattedSender);
+                        console.log(`[WA-GATEWAY] ➕ Subscriber baru terdaftar di Supabase: ${formattedSender}`);
                     }
                     await sock.sendMessage(senderJid, {
                         text: `📈 *Selamat datang di Briefin!*\n\nNomor kamu berhasil terdaftar. Kamu akan otomatis menerima analisis harian pasar saham IDX (IHSG, top movers, market cap) & kartu infografis setiap pagi hari bursa (Senin–Jumat pukul 06:30 WIB).\n\n• Ketik *!info* untuk cek status langganan\n• Ketik *!batal* untuk berhenti berlangganan`
                     });
                 } else if (['!batal', 'batal', '/stop', '!stop', '!unsub', 'unsub', '!unsubscribe'].includes(text)) {
-                    if (isRegistered) {
-                        const updated = subscribers.filter(s => s !== formattedSender);
-                        saveSubscribers(updated);
-                        console.log(`[WA-GATEWAY] ➖ Subscriber berhenti: ${formattedSender}`);
+                    if (registered) {
+                        await removeSubscriber(formattedSender);
+                        console.log(`[WA-GATEWAY] ➖ Subscriber dinonaktifkan di Supabase: ${formattedSender}`);
                     }
                     await sock.sendMessage(senderJid, {
                         text: `👋 *Berhenti Berlangganan*\n\nKamu telah berhenti berlangganan Briefin. Kamu tidak akan menerima brief harian lagi.\n\nKetik *!daftar* kapan saja jika ingin bergabung kembali!`
                     });
                 } else if (['!info', 'info', '!help', 'help', 'menu', '!menu'].includes(text)) {
-                    const statusText = isRegistered ? '✅ Terdaftar (Aktif)' : '❌ Belum Terdaftar';
+                    const statusText = registered ? '✅ Terdaftar (Aktif)' : '❌ Belum Terdaftar';
                     await sock.sendMessage(senderJid, {
                         text: `📊 *Briefin • Market Assistant*\n\nStatus kamu: *${statusText}*\n\nBriefin mengirimkan ringkasan pasar saham IDX harian dan infografis setiap pagi hari bursa secara otomatis.\n\n*Perintah yang tersedia:*\n• *!daftar* - Berlangganan brief harian\n• *!batal* - Berhenti berlangganan\n• *!info* - Cek status langganan kamu`
                     });
@@ -264,9 +249,9 @@ app.get('/status', (req, res) => {
     });
 });
 
-// Get all registered subscribers
-app.get('/subscribers', (req, res) => {
-    const subscribers = loadSubscribers();
+// Get all registered subscribers from Supabase
+app.get('/subscribers', async (req, res) => {
+    const subscribers = await getActiveSubscribers();
     res.json({
         status: true,
         count: subscribers.length,
@@ -275,7 +260,7 @@ app.get('/subscribers', (req, res) => {
 });
 
 // Manage subscribers (add or remove manually via API)
-app.post('/subscribers', (req, res) => {
+app.post('/subscribers', async (req, res) => {
     const { action, target } = req.body;
     if (!target) {
         return res.status(400).json({ status: false, error: 'Parameter "target" diperlukan.' });
@@ -285,19 +270,17 @@ app.post('/subscribers', (req, res) => {
         return res.status(400).json({ status: false, error: 'Format target tidak valid.' });
     }
 
-    let subscribers = loadSubscribers();
     if (action === 'remove') {
-        subscribers = subscribers.filter(s => !jids.includes(s));
-    } else {
-        // default: add
         for (const jid of jids) {
-            if (!subscribers.includes(jid)) {
-                subscribers.push(jid);
-            }
+            await removeSubscriber(jid);
+        }
+    } else {
+        for (const jid of jids) {
+            await addSubscriber(jid);
         }
     }
-    saveSubscribers(subscribers);
 
+    const subscribers = await getActiveSubscribers();
     res.json({
         status: true,
         action: action === 'remove' ? 'removed' : 'added',
@@ -315,9 +298,9 @@ app.post('/send', async (req, res) => {
     }
 
     if (connectionStatus !== 'connected' || !sock) {
-        return res.status(503).json({ 
-            status: false, 
-            error: `WhatsApp belum terhubung (Status saat ini: ${connectionStatus}). Silakan scan QR code terlebih dahulu.` 
+        return res.status(503).json({
+            status: false,
+            error: `WhatsApp belum terhubung (Status saat ini: ${connectionStatus}). Silakan scan QR code terlebih dahulu.`
         });
     }
 

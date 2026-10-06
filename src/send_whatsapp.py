@@ -171,19 +171,53 @@ def _send_via_fonnte(fonnte_token: str, target: str, message_text: str, image_pa
     logger.info("Message successfully sent to WhatsApp via Fonnte.")
     return data
 
-def get_registered_subscribers(gateway_url: str) -> list[str]:
+def get_subscribers_from_supabase() -> list[str]:
     """
-    Fetches the list of active subscribers registered via WhatsApp Gateway.
-    Returns empty list if gateway is unreachable or no subscribers exist.
+    Fetches active subscribers directly from Supabase REST API.
+    Works in both local development and cloud/GitHub Actions without wa-gateway running.
     """
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        return []
+
     try:
-        url = f"{gateway_url.rstrip('/')}/subscribers"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("subscribers", [])
+        url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=jid,phone&is_active=eq.true"
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}"
+        }
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            jids = [item.get("jid") or item.get("phone") for item in data if (item.get("jid") or item.get("phone"))]
+            logger.info(f"Retrieved {len(jids)} active subscriber(s) directly from Supabase.")
+            return jids
+        logger.warning(f"Supabase returned status {resp.status_code}: {resp.text}")
     except Exception as err:
-        logger.warning(f"Could not fetch subscribers from gateway: {err}")
+        logger.warning(f"Could not fetch subscribers directly from Supabase: {err}")
+    return []
+
+def get_registered_subscribers(gateway_url: str = None) -> list[str]:
+    """
+    Fetches the list of active subscribers.
+    Prioritizes Supabase Cloud, with fallback to WhatsApp Gateway endpoint.
+    """
+    # 1. Try Supabase Cloud first
+    supabase_subs = get_subscribers_from_supabase()
+    if supabase_subs:
+        return supabase_subs
+
+    # 2. Fallback to local Gateway /subscribers endpoint
+    if gateway_url:
+        try:
+            url = f"{gateway_url.rstrip('/')}/subscribers"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("subscribers", [])
+        except Exception as err:
+            logger.warning(f"Could not fetch subscribers from gateway: {err}")
     return []
 
 @retry(
@@ -198,7 +232,7 @@ def send_whatsapp_message(message_text: str, target: str = None, image_path: str
     or via Fonnte API (if FONNTE_TOKEN is set), with optional image attachment.
     
     If target is not specified and using Baileys Gateway, it broadcasts to all 
-    registered subscribers (from GET /subscribers) plus WHATSAPP_TARGET from .env.
+    registered subscribers (from Supabase / GET /subscribers) plus WHATSAPP_TARGET from .env.
     
     :param message_text: Text message to send (used as caption if image is attached).
     :param target: Optional destination phone number or group ID. 
@@ -219,7 +253,7 @@ def send_whatsapp_message(message_text: str, target: str = None, image_path: str
         if target:
             targets_to_send.append(target)
         else:
-            # Broadcast to all registered subscribers + default admin target
+            # Broadcast to all registered subscribers from Supabase/Gateway + default admin target
             subscribers = get_registered_subscribers(gateway_url)
             for sub in subscribers:
                 if sub and sub not in targets_to_send:
@@ -235,7 +269,22 @@ def send_whatsapp_message(message_text: str, target: str = None, image_path: str
         logger.info(f"Dispatching WhatsApp message to {len(targets_to_send)} recipient(s): {targets_to_send}")
         return _send_via_gateway(gateway_url, targets_to_send, message_text, image_path)
     else:
-        destination = target or admin_target
+        # Fonnte Mode (e.g. GitHub Actions without local gateway)
+        targets_to_send = []
+        if target:
+            targets_to_send.append(target)
+        else:
+            subscribers = get_registered_subscribers()
+            for sub in subscribers:
+                # Strip @s.whatsapp.net for Fonnte
+                clean_phone = sub.split('@')[0] if '@' in sub else sub
+                if clean_phone and clean_phone not in targets_to_send:
+                    targets_to_send.append(clean_phone)
+            if admin_target and admin_target not in targets_to_send:
+                targets_to_send.append(admin_target)
+
+        destination = ",".join(targets_to_send) if targets_to_send else admin_target
         if not destination:
             raise ValueError("Missing WhatsApp credentials: WHATSAPP_TARGET not configured.")
         return _send_via_fonnte(fonnte_token, destination, message_text, image_path)
+

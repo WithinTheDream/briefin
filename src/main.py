@@ -25,31 +25,40 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def dispatch_brief(message_text: str, image_path: str = None):
+import json
+import argparse
+import time
+
+def dispatch_brief(message_dict: dict, image_path: str = None, target: str = None):
     """
     Sends the brief to configured channels (Telegram and/or WhatsApp via Gateway / Fonnte) with optional image card.
+    If target is provided, sends only to that specific target.
     """
     telegram_ready = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
     whatsapp_ready = bool(os.getenv("WA_GATEWAY_URL") or (os.getenv("FONNTE_TOKEN") and os.getenv("WHATSAPP_TARGET")))
     
     if not telegram_ready and not whatsapp_ready:
-        raise ValueError("No notification channels configured! Provide Telegram or WhatsApp (WA_GATEWAY_URL / FONNTE_TOKEN) credentials.")
+        raise ValueError("No notification channels configured! Provide Telegram or WhatsApp credentials.")
         
     delivery_success = False
     
-    if telegram_ready:
+    # If target is specified and looks like a WhatsApp number/JID
+    is_wa_target = target and (target.endswith("@s.whatsapp.net") or target.endswith("@g.us") or target.endswith("@lid") or target.replace("+", "").isdigit())
+    is_tg_target = target and not is_wa_target
+
+    if telegram_ready and (not target or is_tg_target):
         try:
             logger.info("Sending brief to Telegram...")
-            send_telegram_message(message_text, image_path=image_path)
+            send_telegram_message(message_dict, image_path=image_path)
             delivery_success = True
         except Exception as e:
             logger.error(f"Failed to send to Telegram: {e}")
             
-    if whatsapp_ready:
+    if whatsapp_ready and (not target or is_wa_target):
         try:
             channel = "Self-Hosted Gateway" if os.getenv("WA_GATEWAY_URL") else "Fonnte"
-            logger.info(f"Sending brief to WhatsApp via {channel}...")
-            send_whatsapp_message(message_text, image_path=image_path)
+            logger.info(f"Sending brief to WhatsApp ({target or 'All Subscribers'}) via {channel}...")
+            send_whatsapp_message(message_dict, target=target, image_path=image_path)
             delivery_success = True
         except Exception as e:
             logger.error(f"Failed to send to WhatsApp: {e}")
@@ -64,59 +73,104 @@ def dispatch_error_alert(error_msg: str):
     telegram_ready = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
     whatsapp_ready = bool(os.getenv("WA_GATEWAY_URL") or (os.getenv("FONNTE_TOKEN") and os.getenv("WHATSAPP_TARGET")))
     
+    err_dict = {"ihsg": error_msg}
     if telegram_ready:
         try:
-            send_telegram_message(error_msg)
+            send_telegram_message(err_dict)
         except Exception:
             pass
             
     if whatsapp_ready:
         try:
-            send_whatsapp_message(error_msg)
+            send_whatsapp_message(err_dict)
         except Exception:
             pass
 
+CACHE_DATA_FILE = "logs/cached_normalized.json"
+CACHE_SUMMARY_FILE = "logs/cached_summary.json"
+
 def main():
-    # Load env vars for local development (will be ignored in GitHub Actions if not present)
     load_dotenv()
     
-    logger.info("Starting Briefin workflow...")
+    parser = argparse.ArgumentParser(description="Briefin Automated Stock Brief")
+    parser.add_argument("--target", type=str, default=None, help="Specific target JID or phone number (e.g. 62812... or group JID)")
+    parser.add_argument("--card", type=str, default="1", help="Infographic card style (1: Standard, 2: Sector/Macro, 3: Executive)")
+    parser.add_argument("--force", action="store_true", help="Force fresh API fetch without using cache")
+    args = parser.parse_args()
+    
+    logger.info(f"Starting Briefin workflow (target: {args.target}, card: {args.card})...")
     
     try:
-        # Step 1: Fetch Data
-        logger.info("Fetching data from Sectors API...")
-        idx_total = get_idx_total()
-        ihsg = get_ihsg()
-        top_changes = get_top_changes()
+        normalized = None
+        message_dict = None
+        card_output = f"logs/market_card_v{args.card}.png"
         
-        # Step 2: Normalize Data
-        normalized = normalize_data(idx_total, ihsg, top_changes)
+        # Check cache if manual trigger (--target) to save API credits & enable instant response
+        now = time.time()
+        use_cache = not args.force and args.target and os.path.exists(CACHE_DATA_FILE) and os.path.exists(CACHE_SUMMARY_FILE)
         
-        # Step 3: Generate Market Infographic Card
-        logger.info("Generating market infographic card...")
-        image_path = generate_market_card(normalized, "logs/market_card.png")
-        
-        # Step 4: Summarize via AI
-        formatted_for_ai = format_data_for_ai(normalized)
-        ai_summary = summarize_market_data(formatted_for_ai)
-        
-        # Step 5: Formatting Message
-        if ai_summary:
-            logger.info("Using AI-generated summary.")
-            final_message = f"📊 **BRIEFIN • DAILY MARKET BRIEF**\n\n{ai_summary.strip()}\n\n_Automated by Briefin_"
-        else:
-            logger.warning("AI summary failed or was not configured. Using fallback template.")
-            final_message = generate_fallback_message(normalized)
+        if use_cache:
+            file_age = now - os.path.getmtime(CACHE_DATA_FILE)
+            if file_age < 14400:  # Cache valid for 4 hours
+                try:
+                    with open(CACHE_DATA_FILE, "r", encoding="utf-8") as f:
+                        normalized = json.load(f)
+                    with open(CACHE_SUMMARY_FILE, "r", encoding="utf-8") as f:
+                        message_dict = json.load(f)
+                    logger.info("⚡ Reusing cached market data & AI summary for instant briefin response.")
+                except Exception as cache_err:
+                    logger.warning(f"Failed to read cache: {cache_err}")
+                    normalized, message_dict = None, None
+
+        if not normalized or not message_dict:
+            # Step 1: Fetch Data from Sectors API
+            logger.info("Fetching fresh data from Sectors API...")
+            idx_total = get_idx_total()
+            ihsg = get_ihsg()
+            top_changes = get_top_changes()
             
-        # Step 6: Dispatch to Telegram & WhatsApp
-        dispatch_brief(final_message, image_path=image_path)
+            # Step 2: Normalize Data
+            normalized = normalize_data(idx_total, ihsg, top_changes)
+            with open(CACHE_DATA_FILE, "w", encoding="utf-8") as f:
+                json.dump(normalized, f)
+            
+            # Step 3: Summarize via AI
+            formatted_for_ai = format_data_for_ai(normalized)
+            ai_summary = summarize_market_data(formatted_for_ai)
+            
+            if ai_summary:
+                try:
+                    clean = ai_summary.strip()
+                    if clean.startswith("```json"):
+                        clean = clean[7:]
+                    if clean.startswith("```"):
+                        clean = clean[3:]
+                    if clean.endswith("```"):
+                        clean = clean[:-3]
+                    message_dict = json.loads(clean.strip())
+                    logger.info("Successfully parsed AI summary JSON.")
+                except Exception as e:
+                    logger.warning(f"Failed to parse AI output as JSON: {e}. Falling back to template.")
+                    message_dict = None
+
+            if not message_dict:
+                logger.warning("Using fallback template dictionary.")
+                message_dict = generate_fallback_message(normalized)
+                
+            with open(CACHE_SUMMARY_FILE, "w", encoding="utf-8") as f:
+                json.dump(message_dict, f)
         
+        # Step 4: Generate Market Infographic Card (using requested style)
+        logger.info(f"Generating market infographic card style {args.card}...")
+        image_path = generate_market_card(normalized, card_output, card_style=args.card)
+        
+        # Step 5: Dispatch to Telegram & WhatsApp
+        dispatch_brief(message_dict, image_path=image_path, target=args.target)
         logger.info("Workflow completed successfully.")
         
     except Exception as e:
         logger.exception("A critical error occurred in the workflow.")
-        # Attempt to send error alert
-        error_msg = f"⚠️ **Briefin Alert**\n\nFailed to run morning brief workflow.\n\nError: `{str(e)}`"
+        error_msg = f"⚠️ *Briefin Alert*\n\nFailed to run morning brief workflow.\n\nError: `{str(e)}`"
         dispatch_error_alert(error_msg)
         sys.exit(1)
 

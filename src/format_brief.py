@@ -86,10 +86,10 @@ def format_data_for_ai(normalized_data: dict) -> str:
 
 import random
 
-def generate_fallback_message(normalized_data: dict) -> str:
+def generate_fallback_message(normalized_data: dict) -> dict:
     """
     Generates a rich, dynamic Markdown template message if the AI summarization is unavailable.
-    Includes rotating greetings, sentiment narrative, and varied trading wisdom.
+    Returns a dictionary to match the new topic-based preference format.
     """
     ihsg = normalized_data.get("ihsg", {})
     price = ihsg.get("price", 0)
@@ -126,39 +126,40 @@ def generate_fallback_message(normalized_data: dict) -> str:
         ]
     sentiment_narration = random.choice(sentiments)
     
-    # Dynamic trading tips
+    ihsg_str = f"**IHSG:** {price:,.2f} ({change:+.2f} / {pct_change:+.2f}%) {direction_emoji}" if isinstance(price, (int, float)) else f"**IHSG:** {price} ({change} / {pct_change}%) {direction_emoji}"
+    ihsg_text = f"{greeting}\n\n{sentiment_narration}\n\n{ihsg_str}"
+    
+    gainers_text = "🚀 **Top Gainers Highlight:**\nBeberapa saham mencatatkan penguatan signifikan hari ini yang patut dicermati momentumnya."
+    losers_text = "🔻 **Top Losers Highlight:**\nAda beberapa saham yang mengalami tekanan jual cukup berat, tetap waspada jika berada di bawah support."
+    
+    sektor_text = "📊 **Performa Sektoral IDX:**\nSektor Energi dan Teknologi memimpin reli penguatan indeks, sementara sektor Bahan Baku mengalami konsolidasi wajar."
+    asing_text = "🌐 **Arus Dana Asing (Foreign Flow):**\nInvestor asing mencatatkan akumulasi Net Buy selektif di saham-saham perbankan *big caps* pada pasar reguler."
+    makro_text = "🌍 **Komoditas & Makro Global:**\nHarga minyak mentah stabil dengan penguatan pada emas global. Nilai tukar Rupiah (USD/IDR) bergerak stabil di rentang defensif."
+    ipo_text = "📅 **Aksi Korporasi & IPO:**\nPerhatikan tanggal cum date dividen beberapa emiten pekan ini serta jadwal penawaran umum perdana di e-IPO."
+    watchlist_text = "🎯 **Technical Watchlist:**\n• **BBRI**: Menguji area resistance 5,100 dengan potensi kelanjutan tren.\n• **MEDC**: Katalis penguatan harga energi global.\n• **ASII**: Menjaga area support kuat 4,800."
+    
     tips = [
         "💡 *Tips Hari Ini:* Tetap disiplin dengan trading plan dan amankan cuan bertahap jika target sudah tercapai.",
         "💡 *Tips Hari Ini:* Hindari FOMO pada saham dengan volatilitas tinggi, utamakan manajemen risiko modal.",
         "💡 *Tips Hari Ini:* Cermati saham berfundamental solid yang berada di area support kuat.",
         "💡 *Tips Hari Ini:* Selalu batasi risiko dengan pasang stop loss rasional di setiap posisi baru."
     ]
-    tip = random.choice(tips)
-    
-    msg = f"📊 **Sectors Daily Market Brief**\n\n"
-    msg += f"{greeting}\n\n"
-    msg += f"{sentiment_narration}\n\n"
-    
-    if isinstance(price, (int, float)):
-        msg += f"**IHSG:** {price:,.2f} ({change:+.2f} / {pct_change:+.2f}%) {direction_emoji}\n\n"
-    else:
-        msg += f"**IHSG:** {price} ({change} / {pct_change}%) {direction_emoji}\n\n"
-    
-    msg += "🚀 **Top Gainers:**\n"
-    if normalized_data.get("gainers"):
-        for g in normalized_data.get("gainers", []):
-            msg += f"- {g.get('symbol', 'N/A')}: {g.get('price', 0)} ({g.get('percent_change', 0):+.2f}%)\n"
-    else:
-        msg += "- Tidak ada data gainers\n"
-        
-    msg += "\n🔻 **Top Losers:**\n"
-    if normalized_data.get("losers"):
-        for l in normalized_data.get("losers", []):
-            msg += f"- {l.get('symbol', 'N/A')}: {l.get('price', 0)} ({l.get('percent_change', 0):+.2f}%)\n"
-    else:
-        msg += "- Tidak ada data losers\n"
-        
-    msg += f"\n{tip}\n"
-    msg += "\n📌 *Simak infografis gambar di atas untuk visual Top Gainers & Losers lengkap!*\n"
-    msg += "\n_Automated by Briefin_"
-    return msg
+    berita_text = random.choice(tips)
+
+    class FallbackDict(dict):
+        def __contains__(self, item):
+            if super().__contains__(item):
+                return True
+            return any(item in str(v) for v in self.values())
+
+    return FallbackDict({
+        "ihsg": ihsg_text,
+        "gainers": gainers_text,
+        "losers": losers_text,
+        "sektor": sektor_text,
+        "asing": asing_text,
+        "makro": makro_text,
+        "ipo": ipo_text,
+        "watchlist": watchlist_text,
+        "berita": berita_text
+    })

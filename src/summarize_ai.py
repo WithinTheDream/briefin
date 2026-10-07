@@ -88,29 +88,25 @@ def summarize_market_data(formatted_data: str) -> str:
 
     prompt = f"""
 Anda adalah analis pasar modal handal dan kurator konten finansial profesional.
-Tugas Anda: Buat pesan NARASI MORNING MARKET BRIEF harian untuk bursa saham Indonesia (IHSG / IDX) berdasarkan data di bawah ini.
+Tugas Anda: Buat narasi brief pasar saham Indonesia (IHSG / IDX) berdasarkan data di bawah.
 
-PENTING - Konteks Pesan & Infografis:
-- Pesan teks ini akan dikirim bersama KARTU INFOGRAFIS GAMBAR yang sudah menampilkan tabel lengkap Top 5 Gainers dan Top 5 Losers.
-- Oleh karena itu, pesan teks ini BUKAN tabel angka mentah, melainkan MURNI NARASI PASAR (cerita, sentimen, dan strategi).
-- Narasi HARUS bervariasi, dinamis, segar, cerdas, dan tidak terdengar seperti template bot yang kaku.
+PENTING - ATURAN OUTPUT (WAJIB DIIKUTI):
+1. Output HARUS murni format JSON string yang valid.
+2. JANGAN tambahkan markdown code blocks seperti ```json atau ``` sama sekali. Langsung awali dengan {{ dan akhiri dengan }}.
+3. Struktur JSON yang wajib dikembalikan (harus memuat 9 key persis seperti ini):
+{{
+  "ihsg": "Sapaan pagi yang hangat, inspiratif, dan narasi mendalam mengenai sentimen/suasana IHSG beserta angka pergerakan poin & persentase.",
+  "gainers": "Ulasan naratif 1-2 kalimat mengenai saham top gainers pendorong pasar.",
+  "losers": "Ulasan naratif 1-2 kalimat mengenai saham top losers yang tertekan aksi profit taking.",
+  "sektor": "Ulasan performa sektoral IDX: sebutkan sektor yang memimpin reli (misal: Energy, Financials, Tech) atau yang sedang terkoreksi.",
+  "asing": "Ringkasan analisis arus dana asing (Net Foreign Flow buy/sell) di pasar reguler dan implikasinya.",
+  "makro": "Update sentimen komoditas utama (Minyak WTI/Brent, Emas, Nikel, CPO) serta pergerakan nilai tukar Rupiah (USD/IDR).",
+  "ipo": "Info/pengingat emiten yang sedang bookbuilding/listing IPO, jadwal RUPS, atau cum date dividen.",
+  "watchlist": "Rekomendasi teknikal 2-3 saham pilihan yang menarik (misal: breakout resistance atau menguji support kuat).",
+  "berita": "Catatan strategi trading dan tips money management taktis untuk sesi hari ini."
+}}
 
-Susunan Narasi Pesan:
-1. ☀️ **Sapaan Pagi & Narasi Sentimen**:
-   - Sapaan pagi yang hangat, inspiratif, dan bervariasi setiap hari.
-   - Narasi mendalam mengenai suasana/mood IHSG (apakah pasar sedang konsolidasi, tertekan aksi profit taking, optimis, atau wait-and-see sentimen makro).
-2. 📊 **Ulasan IHSG & Penggerak Pasar**:
-   - Tuliskan pergerakan IHSG kemarin (poin & persentase) dalam kalimat mengalir.
-   - Singgung secara naratif 1 atau 2 saham/sektor yang paling menarik perhatian (misal yang memimpin reli atau yang mengalami tekanan paling dalam) tanpa mengetik ulang seluruh daftar tabel.
-3. 💡 **Catatan Strategi & Tips Cuan Hari Ini**:
-   - Berikan 1-2 kalimat tips taktis yang aplikatif (misal: disiplin money management, amankan modal, cermati saham pullback di support, atau batasi transaksi di saham berfrekuensi tinggi).
-4. 📌 **Call to Action Singkat**:
-   - 1 baris singkat ramah (misal: "Detail daftar Top 5 Gainers & Losers lengkap dapat disimak pada infografis di atas!").
-
-Format Tampilan:
-- Gunakan Bahasa Indonesia yang santai tapi berbobot, luwes, dan enak dibaca.
-- Gunakan bullet points bila perlu, baris spasi yang rapi, dan emoji yang relevan.
-- Panjang sekitar 150-250 kata (padat, menarik, dan pas di layar ponsel).
+Gunakan Bahasa Indonesia yang santai, luwes, berbobot, dan tambahkan emoji yang relevan.
 
 Data Pasar IDX:
 {formatted_data}

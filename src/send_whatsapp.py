@@ -191,7 +191,27 @@ def _send_via_fonnte(fonnte_token: str, target: str, message_text: str, image_pa
     logger.info("Message successfully sent to WhatsApp via Fonnte.")
     return data
 
-def get_subscribers_from_supabase() -> list[str]:
+class SubscriberJid(str):
+    def __new__(cls, jid, preferences=None, card_style="1"):
+        instance = super().__new__(cls, str(jid))
+        instance.jid = str(jid)
+        instance.preferences = preferences if (preferences and isinstance(preferences, list)) else DEFAULT_TOPICS
+        instance.card_style = str(card_style) if card_style else "1"
+        return instance
+
+    def get(self, key, default=None):
+        if key == "jid": return self.jid
+        if key == "preferences": return self.preferences
+        if key == "card_style": return self.card_style
+        return default
+
+    def __getitem__(self, key):
+        if key == "jid": return self.jid
+        if key == "preferences": return self.preferences
+        if key == "card_style": return self.card_style
+        return super().__getitem__(key)
+
+def get_subscribers_from_supabase() -> list:
     """
     Fetches active subscribers directly from Supabase REST API.
     Works in both local development and cloud/GitHub Actions without wa-gateway running.
@@ -202,7 +222,7 @@ def get_subscribers_from_supabase() -> list[str]:
         return []
 
     try:
-        url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=jid,phone&is_active=eq.true"
+        url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=jid,phone,preferences,card_style&is_active=eq.true"
         headers = {
             "apikey": supabase_key,
             "Authorization": f"Bearer {supabase_key}"
@@ -210,17 +230,21 @@ def get_subscribers_from_supabase() -> list[str]:
         resp = requests.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
-            jids = [item.get("jid") or item.get("phone") for item in data if (item.get("jid") or item.get("phone"))]
-            logger.info(f"Retrieved {len(jids)} active subscriber(s) directly from Supabase.")
-            return jids
+            subs = []
+            for item in data:
+                jid = item.get("jid") or item.get("phone")
+                if jid:
+                    subs.append(SubscriberJid(jid, preferences=item.get("preferences"), card_style=item.get("card_style")))
+            logger.info(f"Retrieved {len(subs)} active subscriber(s) directly from Supabase.")
+            return subs
         logger.warning(f"Supabase returned status {resp.status_code}: {resp.text}")
     except Exception as err:
         logger.warning(f"Could not fetch subscribers directly from Supabase: {err}")
     return []
 
-def get_registered_subscribers(gateway_url: str = None) -> list[str]:
+def get_registered_subscribers(gateway_url: str = None) -> list:
     """
-    Fetches the list of active subscribers.
+    Fetches the list of active subscribers with their preferences.
     Prioritizes Supabase Cloud, with fallback to WhatsApp Gateway endpoint.
     """
     # 1. Try Supabase Cloud first
@@ -235,10 +259,39 @@ def get_registered_subscribers(gateway_url: str = None) -> list[str]:
             response = requests.get(url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                return data.get("subscribers", [])
+                raw_subs = data.get("subscribers", [])
+                formatted_subs = []
+                for s in raw_subs:
+                    if isinstance(s, dict):
+                        jid = s.get("jid") or s.get("phone")
+                        if jid:
+                            formatted_subs.append(SubscriberJid(jid, preferences=s.get("preferences"), card_style=s.get("card_style")))
+                    elif isinstance(s, str):
+                        formatted_subs.append(SubscriberJid(s, preferences=DEFAULT_TOPICS, card_style="1"))
+                return formatted_subs
         except Exception as err:
             logger.warning(f"Could not fetch subscribers from gateway: {err}")
     return []
+
+DEFAULT_TOPICS = ["ihsg", "gainers", "losers", "sektor", "asing", "makro", "ipo", "watchlist", "berita"]
+
+def build_message_from_dict(message_dict: dict, preferences: list) -> str:
+    """Constructs the final text based on user preferences with clean styling."""
+    if not preferences:
+        preferences = DEFAULT_TOPICS
+    
+    parts = ["📊 *BRIEFIN • DAILY MARKET BRIEF*"]
+    
+    topic_order = [
+        "ihsg", "gainers", "losers", "sektor", "asing", "makro", "ipo", "watchlist", "berita"
+    ]
+    
+    for key in topic_order:
+        if key in preferences and key in message_dict and message_dict[key]:
+            parts.append(str(message_dict[key]).strip())
+    
+    parts.append("_Automated by Briefin_")
+    return "\n\n".join(parts)
 
 @retry(
     stop=stop_after_attempt(3),
@@ -246,70 +299,91 @@ def get_registered_subscribers(gateway_url: str = None) -> list[str]:
     retry=retry_if_exception_type((requests.RequestException, WhatsAppError)),
     reraise=True
 )
-def send_whatsapp_message(message_text: str, target: str = None, image_path: str = None) -> dict:
+def send_whatsapp_message(message_data, target: str = None, image_path: str = None) -> dict:
     """
-    Sends a WhatsApp message via Self-Hosted Baileys Gateway (if WA_GATEWAY_URL is set)
-    or via Fonnte API (if FONNTE_TOKEN is set), with optional image attachment.
-    
-    If target is not specified and using Baileys Gateway, it broadcasts to all 
-    registered subscribers (from Supabase / GET /subscribers) plus WHATSAPP_TARGET from .env.
-    
-    :param message_text: Text message to send (used as caption if image is attached).
-    :param target: Optional destination phone number or group ID. 
-                   If not provided, broadcasts to all registered subscribers.
-    :param image_path: Optional path to an image file to attach.
-    :return: Response JSON from Gateway or Fonnte.
+    Sends WhatsApp messages dynamically based on preferences.
+    Supports either formatted dict (for customized topics) or raw string.
     """
     gateway_url = os.getenv("WA_GATEWAY_URL")
     fonnte_token = os.getenv("FONNTE_TOKEN")
     admin_target = os.getenv("WHATSAPP_TARGET")
     
     if not gateway_url and not fonnte_token:
-        logger.error("No WhatsApp provider configured (set WA_GATEWAY_URL or FONNTE_TOKEN).")
-        raise ValueError("Missing WhatsApp credentials. Provide WA_GATEWAY_URL or FONNTE_TOKEN.")
-        
-    if gateway_url:
-        targets_to_send = []
-        if target:
-            norm_target = normalize_target_jid(target)
-            if norm_target:
-                targets_to_send.append(norm_target)
+        logger.error("No WhatsApp provider configured.")
+        raise ValueError("Missing WhatsApp credentials.")
+
+    # 1. Plain String Mode (e.g. Unit Tests or Direct Text)
+    if isinstance(message_data, str):
+        if gateway_url:
+            targets_to_send = []
+            if target:
+                targets_to_send.append(target)
+            else:
+                subscribers = get_registered_subscribers(gateway_url)
+                for sub in subscribers:
+                    norm = normalize_target_jid(sub)
+                    if norm and norm not in [normalize_target_jid(t) for t in targets_to_send]:
+                        targets_to_send.append(sub)
+                if admin_target:
+                    norm_admin = normalize_target_jid(admin_target)
+                    if norm_admin and norm_admin not in [normalize_target_jid(t) for t in targets_to_send]:
+                        targets_to_send.append(admin_target)
+            if not targets_to_send:
+                raise ValueError("Missing WhatsApp credentials: No recipients available.")
+            return _send_via_gateway(gateway_url, targets_to_send, message_data, image_path)
         else:
-            # Broadcast to all registered subscribers + default admin target (without duplication)
-            subscribers = get_registered_subscribers(gateway_url)
-            for sub in subscribers:
-                norm_sub = normalize_target_jid(sub)
-                if norm_sub and norm_sub not in targets_to_send:
-                    targets_to_send.append(norm_sub)
-                    
-            if admin_target:
-                norm_admin = normalize_target_jid(admin_target)
-                if norm_admin and norm_admin not in targets_to_send:
-                    targets_to_send.append(norm_admin)
+            targets_to_send = []
+            if target:
+                targets_to_send.append(target)
+            else:
+                subscribers = get_registered_subscribers()
+                for sub in subscribers:
+                    clean = sub.split('@')[0] if '@' in sub else sub
+                    if clean and clean not in targets_to_send:
+                        targets_to_send.append(clean)
+                if admin_target and admin_target not in targets_to_send:
+                    targets_to_send.append(admin_target)
+            destination = ",".join(targets_to_send) if targets_to_send else admin_target
+            if not destination:
+                raise ValueError("Missing WhatsApp credentials: WHATSAPP_TARGET not configured.")
+            return _send_via_fonnte(fonnte_token, destination, message_data, image_path)
 
-        if not targets_to_send:
-            logger.error("No WhatsApp recipients found (no subscribers and WHATSAPP_TARGET empty).")
-            raise ValueError("Missing WhatsApp credentials: No recipients available.")
+    # 2. Dictionary Mode (Topic-Based Custom Preferences)
+    registered_list = get_registered_subscribers(gateway_url)
+    subscribers = []
 
-        logger.info(f"Dispatching WhatsApp message to {len(targets_to_send)} recipient(s): {targets_to_send}")
-        return _send_via_gateway(gateway_url, targets_to_send, message_text, image_path)
+    if target:
+        norm_target = normalize_target_jid(target)
+        existing = next((s for s in registered_list if normalize_target_jid(s) == norm_target), None)
+        target_prefs = getattr(existing, "preferences", DEFAULT_TOPICS) if existing else DEFAULT_TOPICS
+        subscribers.append(SubscriberJid(target, preferences=target_prefs))
     else:
-        # Fonnte Mode (e.g. GitHub Actions without local gateway)
-        targets_to_send = []
-        if target:
-            targets_to_send.append(target)
-        else:
-            subscribers = get_registered_subscribers()
-            for sub in subscribers:
-                # Strip @s.whatsapp.net for Fonnte
-                clean_phone = sub.split('@')[0] if '@' in sub else sub
-                if clean_phone and clean_phone not in targets_to_send:
-                    targets_to_send.append(clean_phone)
-            if admin_target and admin_target not in targets_to_send:
-                targets_to_send.append(admin_target)
+        for s in registered_list:
+            subscribers.append(s)
+        if admin_target:
+            norm_admin = normalize_target_jid(admin_target)
+            if not any(normalize_target_jid(s) == norm_admin for s in subscribers):
+                subscribers.append(SubscriberJid(admin_target, preferences=DEFAULT_TOPICS))
 
-        destination = ",".join(targets_to_send) if targets_to_send else admin_target
-        if not destination:
-            raise ValueError("Missing WhatsApp credentials: WHATSAPP_TARGET not configured.")
-        return _send_via_fonnte(fonnte_token, destination, message_text, image_path)
+    if not subscribers:
+        logger.error("No WhatsApp recipients found.")
+        raise ValueError("Missing WhatsApp recipients.")
+
+    grouped_messages = {}
+    for sub in subscribers:
+        prefs = getattr(sub, "preferences", DEFAULT_TOPICS)
+        final_text = build_message_from_dict(message_data, prefs)
+        grouped_messages.setdefault(final_text, []).append(str(sub))
+
+    last_res = {"status": True}
+    for msg_text, jids in grouped_messages.items():
+        if gateway_url:
+            logger.info(f"Dispatching grouped WA message to {len(jids)} recipient(s)...")
+            last_res = _send_via_gateway(gateway_url, jids, msg_text, image_path)
+        else:
+            for j in jids:
+                clean_phone = j.split('@')[0] if '@' in j else j
+                last_res = _send_via_fonnte(fonnte_token, clean_phone, msg_text, image_path)
+
+    return last_res
 

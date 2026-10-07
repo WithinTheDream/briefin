@@ -21,6 +21,8 @@ if (SUPABASE_URL && SUPABASE_KEY) {
     console.warn('[DB] SUPABASE_URL atau SUPABASE_KEY tidak ditemukan. Menggunakan mode fallback JSON.');
 }
 
+const DEFAULT_PREFERENCES = ['ihsg', 'gainers', 'losers', 'sektor', 'asing', 'makro', 'ipo', 'watchlist', 'berita'];
+
 // Local JSON fallback helpers
 function readLocalSubscribers() {
     try {
@@ -30,6 +32,13 @@ function readLocalSubscribers() {
         }
         const data = fs.readFileSync(SUBSCRIBERS_FILE, 'utf8');
         const parsed = JSON.parse(data);
+        
+        // Migrate old format ['jid1', 'jid2'] to [{jid: 'jid1', preferences: [...], card_style: '1'}]
+        if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+            const migrated = parsed.map(jid => ({ jid, preferences: DEFAULT_PREFERENCES, card_style: '1' }));
+            saveLocalSubscribers(migrated);
+            return migrated;
+        }
         return Array.isArray(parsed) ? parsed : [];
     } catch (err) {
         console.error('[DB] Error membaca subscribers.json lokal:', err.message);
@@ -39,7 +48,17 @@ function readLocalSubscribers() {
 
 function saveLocalSubscribers(list) {
     try {
-        const unique = Array.from(new Set(list.filter(Boolean)));
+        // Remove duplicates by jid
+        const uniqueMap = new Map();
+        list.filter(Boolean).forEach(item => {
+            if (typeof item === 'string') {
+                uniqueMap.set(item, { jid: item, preferences: DEFAULT_PREFERENCES, card_style: '1' });
+            } else if (item && item.jid) {
+                if (!item.card_style) item.card_style = '1';
+                uniqueMap.set(item.jid, item);
+            }
+        });
+        const unique = Array.from(uniqueMap.values());
         fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify(unique, null, 2));
         return true;
     } catch (err) {
@@ -55,15 +74,15 @@ function extractPhoneFromJid(jid) {
 }
 
 /**
- * Mendapatkan seluruh JID subscriber yang aktif (is_active = true)
- * @returns {Promise<string[]>} List of active JIDs
+ * Mendapatkan seluruh subscriber yang aktif beserta preferensinya
+ * @returns {Promise<Array>} List of subscriber objects {jid, phone, is_active, preferences}
  */
 async function getActiveSubscribers() {
     if (supabase) {
         try {
             const { data, error } = await supabase
                 .from('subscribers')
-                .select('jid, phone, is_active')
+                .select('jid, phone, is_active, preferences')
                 .eq('is_active', true);
 
             if (error) {
@@ -71,10 +90,10 @@ async function getActiveSubscribers() {
                 return readLocalSubscribers();
             }
 
-            const jids = (data || []).map(row => row.jid).filter(Boolean);
+            const subs = data || [];
             // Sinkronkan ke backup lokal
-            saveLocalSubscribers(jids);
-            return jids;
+            saveLocalSubscribers(subs);
+            return subs;
         } catch (err) {
             console.error('[DB] Exception getActiveSubscribers:', err.message);
             return readLocalSubscribers();
@@ -85,8 +104,6 @@ async function getActiveSubscribers() {
 
 /**
  * Mengecek apakah JID tertentu sedang aktif berlangganan
- * @param {string} jid 
- * @returns {Promise<boolean>}
  */
 async function isSubscribed(jid) {
     if (!jid) return false;
@@ -100,34 +117,36 @@ async function isSubscribed(jid) {
 
             if (error) {
                 console.error('[DB] Supabase error isSubscribed:', error.message);
-                return readLocalSubscribers().includes(jid);
+                const local = readLocalSubscribers().find(s => s.jid === jid);
+                return Boolean(local);
             }
 
             return Boolean(data && data.is_active);
         } catch (err) {
             console.error('[DB] Exception isSubscribed:', err.message);
-            return readLocalSubscribers().includes(jid);
+            const local = readLocalSubscribers().find(s => s.jid === jid);
+            return Boolean(local);
         }
     }
-    return readLocalSubscribers().includes(jid);
+    const local = readLocalSubscribers().find(s => s.jid === jid);
+    return Boolean(local);
 }
 
 /**
- * Mendaftarkan subscriber baru atau mengaktifkan kembali yang sudah non-aktif
- * @param {string} jid 
- * @param {string} phone
- * @returns {Promise<boolean>}
+ * Mendaftarkan subscriber baru atau mengaktifkan kembali
  */
 async function addSubscriber(jid, phone = null) {
     if (!jid) return false;
     const finalPhone = phone || extractPhoneFromJid(jid);
+    const defaultPrefs = ['ihsg', 'gainers', 'losers', 'berita'];
 
     // Update backup lokal
     const local = readLocalSubscribers();
-    if (!local.includes(jid)) {
-        local.push(jid);
-        saveLocalSubscribers(local);
+    const existingIndex = local.findIndex(s => s.jid === jid);
+    if (existingIndex === -1) {
+        local.push({ jid, preferences: defaultPrefs });
     }
+    saveLocalSubscribers(local);
 
     if (supabase) {
         try {
@@ -135,6 +154,7 @@ async function addSubscriber(jid, phone = null) {
                 jid: jid,
                 phone: finalPhone || 'unknown',
                 is_active: true,
+                preferences: defaultPrefs,
                 updated_at: new Date().toISOString()
             };
 
@@ -165,7 +185,7 @@ async function removeSubscriber(jid) {
 
     // Update backup lokal
     const local = readLocalSubscribers();
-    const updated = local.filter(s => s !== jid);
+    const updated = local.filter(s => s.jid !== jid);
     saveLocalSubscribers(updated);
 
     if (supabase) {
@@ -191,12 +211,95 @@ async function removeSubscriber(jid) {
     return true;
 }
 
+/**
+ * Mengupdate preferensi topik user
+ * @param {string} jid 
+ * @param {string[]} preferences Array topik, misal ['ihsg', 'gainers']
+ * @returns {Promise<boolean>}
+ */
+async function updatePreferences(jid, preferences) {
+    if (!jid) return false;
+
+    // Update backup lokal
+    const local = readLocalSubscribers();
+    const existingIndex = local.findIndex(s => s.jid === jid);
+    if (existingIndex !== -1) {
+        local[existingIndex].preferences = preferences;
+    } else {
+        local.push({ jid, preferences });
+    }
+    saveLocalSubscribers(local);
+
+    if (supabase) {
+        try {
+            const { error } = await supabase
+                .from('subscribers')
+                .update({
+                    preferences: preferences,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('jid', jid);
+
+            if (error) {
+                console.error('[DB] Supabase error updatePreferences:', error.message);
+                return false;
+            }
+            return true;
+        } catch (err) {
+            console.error('[DB] Exception updatePreferences:', err.message);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Mengupdate preferensi gaya kartu visual (1, 2, atau 3)
+ */
+async function updateCardStyle(jid, cardStyle) {
+    if (!jid) return false;
+    const style = String(cardStyle).trim();
+
+    // Update backup lokal
+    const local = readLocalSubscribers();
+    const existingIndex = local.findIndex(s => s.jid === jid);
+    if (existingIndex !== -1) {
+        local[existingIndex].card_style = style;
+    } else {
+        local.push({ jid, preferences: DEFAULT_PREFERENCES, card_style: style });
+    }
+    saveLocalSubscribers(local);
+
+    if (supabase) {
+        try {
+            await supabase
+                .from('subscribers')
+                .update({ card_style: style, updated_at: new Date().toISOString() })
+                .eq('jid', jid);
+        } catch (_) {}
+    }
+    return true;
+}
+
+/**
+ * Mengambil subscriber berdasarkan JID
+ */
+async function getSubscriber(jid) {
+    if (!jid) return null;
+    const local = readLocalSubscribers();
+    return local.find(s => s.jid === jid) || null;
+}
+
 module.exports = {
     supabase,
+    DEFAULT_PREFERENCES,
     getActiveSubscribers,
+    getSubscriber,
     isSubscribed,
     addSubscriber,
     removeSubscriber,
+    updatePreferences,
+    updateCardStyle,
     readLocalSubscribers,
     saveLocalSubscribers,
     extractPhoneFromJid

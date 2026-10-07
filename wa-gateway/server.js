@@ -24,17 +24,15 @@ const path = require('path');
 const fs = require('fs');
 const {
     getActiveSubscribers,
+    getSubscriber,
     isSubscribed,
     addSubscriber,
-    removeSubscriber
+    removeSubscriber,
+    updatePreferences,
+    updateCardStyle,
+    DEFAULT_PREFERENCES
 } = require('./db');
-
-const {
-    getActiveSubscribers,
-    isSubscribed,
-    addSubscriber,
-    removeSubscriber
-} = require('./db');
+const { exec } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -200,23 +198,38 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Listen for incoming messages for subscriber registration (!daftar, !batal, !info)
+function extractMessageText(msg) {
+    if (!msg || !msg.message) return '';
+    let m = msg.message;
+    // Unwrap nested message wrappers (ephemeral, viewOnce, etc.)
+    while (m && (m.ephemeralMessage?.message || m.viewOnceMessage?.message || m.viewOnceMessageV2?.message || m.documentWithCaptionMessage?.message)) {
+        m = m.ephemeralMessage?.message || m.viewOnceMessage?.message || m.viewOnceMessageV2?.message || m.documentWithCaptionMessage?.message;
+    }
+    if (!m) return '';
+    return (
+        m.conversation ||
+        m.extendedTextMessage?.text ||
+        m.imageMessage?.caption ||
+        m.videoMessage?.caption ||
+        ''
+    ).trim();
+}
+
+    // Listen for incoming messages for subscriber registration (!daftar, !batal, !info, !topik / !topic)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify' && type !== 'append') return;
         for (const msg of messages) {
-            // Ignore messages from myself or status broadcasts
-            if (!msg.message || msg.key.fromMe) continue;
+            if (!msg.message) continue;
             const senderJid = msg.key.remoteJid;
             if (!senderJid || senderJid.endsWith('@broadcast') || senderJid.endsWith('@newsletter')) continue;
 
-            const text = (
-                msg.message?.conversation ||
-                msg.message?.extendedTextMessage?.text ||
-                msg.message?.imageMessage?.caption ||
-                ''
-            ).trim().toLowerCase();
-
+            const text = extractMessageText(msg).toLowerCase();
             if (!text) continue;
+
+            // If message is fromMe, only process if it starts with ! or / (enables self-chat testing)
+            if (msg.key.fromMe && !text.startsWith('!') && !text.startsWith('/')) continue;
+
+            console.log(`[WA-GATEWAY] 📩 Pesan masuk [${senderJid}] (fromMe: ${Boolean(msg.key.fromMe)}): "${text}"`);
 
             const formattedSender = formatJid(senderJid);
             if (!formattedSender) continue;
@@ -239,25 +252,145 @@ async function connectToWhatsApp() {
                         await addSubscriber(formattedSender, detectedPhone);
                         console.log(`[WA-GATEWAY] ➕ Subscriber baru terdaftar: ${formattedSender}`);
                     }
+                    console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi pendaftaran ke ${senderJid}...`);
                     await sock.sendMessage(senderJid, {
-                        text: `📈 *Selamat datang di Briefin!*\n\nNomor kamu berhasil terdaftar. Kamu akan otomatis menerima analisis harian pasar saham IDX (IHSG, top movers, market cap) & kartu infografis setiap pagi hari bursa (Senin–Jumat pukul 06:30 WIB).\n\n• Ketik *!info* untuk cek status langganan\n• Ketik *!batal* untuk berhenti berlangganan`
+                        text: `📈 *Selamat datang di Briefin!*\n\nNomor kamu berhasil terdaftar. Kamu akan otomatis menerima analisis harian pasar saham IDX (IHSG, top movers, market cap) & kartu infografis setiap pagi hari bursa (Senin–Jumat pukul 06:30 WIB).\n\n• Ketik *!topik* untuk atur preferensi topik\n• Ketik *!info* untuk cek status langganan\n• Ketik *!batal* untuk berhenti berlangganan`
                     });
+                    console.log(`[WA-GATEWAY] ✅ Balasan !daftar terkirim ke ${senderJid}`);
                 } else if (['!batal', 'batal', '/stop', '!stop', '!unsub', 'unsub', '!unsubscribe'].includes(text)) {
                     if (registered) {
                         await removeSubscriber(formattedSender);
                         console.log(`[WA-GATEWAY] ➖ Subscriber berhenti: ${formattedSender}`);
                     }
+                    console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi berhenti ke ${senderJid}...`);
                     await sock.sendMessage(senderJid, {
                         text: `👋 *Berhenti Berlangganan*\n\nKamu telah berhenti berlangganan Briefin. Kamu tidak akan menerima brief harian lagi.\n\nKetik *!daftar* kapan saja jika ingin bergabung kembali!`
                     });
+                    console.log(`[WA-GATEWAY] ✅ Balasan !batal terkirim ke ${senderJid}`);
                 } else if (['!info', 'info', '!help', 'help', 'menu', '!menu'].includes(text)) {
                     const statusText = registered ? '✅ Terdaftar (Aktif)' : '❌ Belum Terdaftar';
+                    const subData = await getSubscriber(formattedSender);
+                    const curPrefs = subData?.preferences?.length ? subData.preferences.join(', ') : 'Semua (Default)';
+                    const curCard = subData?.card_style || '1';
+
+                    console.log(`[WA-GATEWAY] 📤 Mengirim info ke ${senderJid}...`);
                     await sock.sendMessage(senderJid, {
-                        text: `📊 *Briefin • Market Assistant*\n\nStatus kamu: *${statusText}*\n\nBriefin mengirimkan ringkasan pasar saham IDX harian dan infografis setiap pagi hari bursa secara otomatis.\n\n*Perintah yang tersedia:*\n• *!daftar* - Berlangganan brief harian\n• *!batal* - Berhenti berlangganan\n• *!info* - Cek status langganan kamu`
+                        text: `📊 *Briefin • Market Assistant*\n\nStatus: *${statusText}*\nTopik Aktif: *${curPrefs}*\nGaya Kartu: *Versi ${curCard}*\n\n*Perintah yang tersedia:*\n• *!briefin* - ⚡ Kirim market brief hari ini sekarang juga\n• *!topik* - Atur preferensi 9 topik pasar\n• *!kartu* - Pilih desain visual infografis (1, 2, atau 3)\n• *!daftar* - Berlangganan otomatis pagi hari (06:30 WIB)\n• *!info* - Cek status akun kamu\n• *!batal* - Berhenti berlangganan`
                     });
+                    console.log(`[WA-GATEWAY] ✅ Balasan !info terkirim ke ${senderJid}`);
+                } else if (['!briefin', '/briefin', 'briefin'].includes(text)) {
+                    if (!registered) {
+                        await addSubscriber(formattedSender, detectedPhone);
+                        console.log(`[WA-GATEWAY] ➕ Auto-register subscriber baru via !briefin: ${formattedSender}`);
+                    }
+                    console.log(`[WA-GATEWAY] 🚀 Trigger manual !briefin diminta oleh ${senderJid}`);
+                    await sock.sendMessage(senderJid, {
+                        text: `⏳ *Sedang menyiapkan Briefin harian untukmu...*\n_Mohon tunggu sebentar, data sedang diracik..._`
+                    });
+
+                    const subData = await getSubscriber(formattedSender);
+                    const cardStyle = subData?.card_style || '1';
+                    const mainPyPath = path.resolve(__dirname, '../src/main.py');
+                    const projectRoot = path.resolve(__dirname, '..');
+
+                    const pyCmd = `python "${mainPyPath}" --target "${formattedSender}" --card "${cardStyle}"`;
+                    console.log(`[WA-GATEWAY] Menjalankan: ${pyCmd}`);
+
+                    exec(pyCmd, { cwd: projectRoot }, (err, stdout, stderr) => {
+                        if (err) {
+                            console.error(`[WA-GATEWAY] ❌ Gagal trigger briefin untuk ${formattedSender}:`, stderr || err.message);
+                            sock.sendMessage(senderJid, { text: `⚠️ Gagal menghasilkan brief. Silakan coba lagi beberapa saat lagi.` }).catch(() => {});
+                        } else {
+                            console.log(`[WA-GATEWAY] ✅ Briefin sukses dikirim ke ${formattedSender}`);
+                        }
+                    });
+                } else if (['!kartu', '/kartu', '!card', '/card', 'kartu', 'card'].includes(text)) {
+                    console.log(`[WA-GATEWAY] 📤 Mengirim menu kartu ke ${senderJid}...`);
+                    await sock.sendMessage(senderJid, {
+                        text: `🖼️ *Pilihan Desain Infografis Briefin:*\n\n` +
+                              `*1. Versi 1 (Standard)*: IHSG Composite Pulse + Top 5 Gainers & Losers (Angka IHSG Putih Bersih)\n` +
+                              `*2. Versi 2 (Sector & Macro)*: IDX Sector Heatmap + Global Macro (Minyak, Emas, CPO) & Technical Watchlist\n` +
+                              `*3. Versi 3 (Executive All-in-One)*: Dashboard Lengkap (IHSG, Gainers/Losers, Sektor, & Watchlist)\n\n` +
+                              `Ketik *!kartu 1*, *!kartu 2*, atau *!kartu 3* untuk memilih gaya favoritmu!`
+                    });
+                    console.log(`[WA-GATEWAY] ✅ Balasan menu kartu terkirim ke ${senderJid}`);
+                } else if (
+                    text.startsWith('!kartu ') || text.startsWith('/kartu ') ||
+                    text.startsWith('!card ') || text.startsWith('/card ') ||
+                    text.startsWith('kartu ') || text.startsWith('card ')
+                ) {
+                    const arg = text.replace(/^(!|\/)?(kartu|card)\s+/, '').trim();
+                    if (!['1', '2', '3'].includes(arg)) {
+                        await sock.sendMessage(senderJid, { text: `❌ Pilihan kartu tidak valid. Pilih angka 1, 2, atau 3. Contoh: *!kartu 3*` });
+                    } else {
+                        await updateCardStyle(formattedSender, arg);
+                        const names = { '1': 'Versi 1 (Standard Movers)', '2': 'Versi 2 (Sector & Macro Radar)', '3': 'Versi 3 (Executive All-in-One)' };
+                        console.log(`[WA-GATEWAY] 📤 Update gaya kartu [${arg}] untuk ${senderJid}`);
+                        await sock.sendMessage(senderJid, {
+                            text: `✅ Gaya kartu berhasil diubah ke: *${names[arg]}*!\nKetik *!briefin* untuk melihat hasilnya sekarang.`
+                        });
+                    }
+                } else if (['!topik', '/topik', '!topic', '/topic', 'topik', 'topic'].includes(text)) {
+                    console.log(`[WA-GATEWAY] 📤 Mengirim menu topik ke ${senderJid}...`);
+                    await sock.sendMessage(senderJid, {
+                        text: `📝 *Pengaturan 9 Topik Briefin:*\n\n` +
+                              `Balas angka topik yang ingin kamu terima (bisa lebih dari satu, pisahkan dengan koma):\n` +
+                              `1. *IHSG* (Pergerakan & Sentimen Indeks)\n` +
+                              `2. *Top Gainers* (Saham Pendorong Pasar)\n` +
+                              `3. *Top Losers* (Saham Terkoreksi)\n` +
+                              `4. *Performa Sektor* (Sektor Penggerak Reli IDX)\n` +
+                              `5. *Arus Dana Asing* (Net Foreign Flow)\n` +
+                              `6. *Komoditas & Makro* (Minyak, Emas, CPO, USD/IDR)\n` +
+                              `7. *IPO & Aksi Korporasi* (RUPS, Dividen, e-IPO)\n` +
+                              `8. *Watchlist Saham* (2-3 Rekomendasi Teknikal)\n` +
+                              `9. *Tips & Strategi* (Money Management)\n\n` +
+                              `Contoh ketik: *!topik 1,4,8* untuk memilih IHSG, Sektor, dan Watchlist.\n` +
+                              `Ketik *!topik all* untuk memilih semua topik.`
+                    });
+                    console.log(`[WA-GATEWAY] ✅ Balasan menu topik terkirim ke ${senderJid}`);
+                } else if (
+                    text.startsWith('!topik ') || text.startsWith('/topik ') ||
+                    text.startsWith('!topic ') || text.startsWith('/topic ') ||
+                    text.startsWith('topik ') || text.startsWith('topic ')
+                ) {
+                    const arg = text.replace(/^(!|\/)?(topik|topic)\s+/, '').trim();
+                    if (!registered) {
+                        await addSubscriber(formattedSender, detectedPhone);
+                        console.log(`[WA-GATEWAY] ➕ Auto-register subscriber baru via set topik: ${formattedSender}`);
+                    }
+
+                    if (arg === 'all' || arg === 'semua') {
+                        await updatePreferences(formattedSender, DEFAULT_PREFERENCES);
+                        console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi topik 'all' ke ${senderJid}...`);
+                        await sock.sendMessage(senderJid, { text: `✅ Preferensi disimpan! Kamu akan menerima seluruh 9 topik pasar.\nKetik *!briefin* untuk melihat hasilnya sekarang.` });
+                    } else {
+                        const map = {
+                            '1': 'ihsg',
+                            '2': 'gainers',
+                            '3': 'losers',
+                            '4': 'sektor',
+                            '5': 'asing',
+                            '6': 'makro',
+                            '7': 'ipo',
+                            '8': 'watchlist',
+                            '9': 'berita'
+                        };
+                        const choices = arg.split(/[,;\s]+/).map(x => x.trim()).filter(x => map[x]);
+                        if (choices.length === 0) {
+                            await sock.sendMessage(senderJid, { text: `❌ Format salah. Contoh: *!topik 1,4,8* atau *!topik all*` });
+                        } else {
+                            const newPrefs = Array.from(new Set(choices.map(c => map[c])));
+                            await updatePreferences(formattedSender, newPrefs);
+                            console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi topik [${newPrefs.join(', ')}] ke ${senderJid}...`);
+                            await sock.sendMessage(senderJid, {
+                                text: `✅ Preferensi topik berhasil disimpan: *${newPrefs.join(', ')}*!\nKetik *!briefin* untuk melihat hasilnya sekarang.`
+                            });
+                        }
+                    }
+                    console.log(`[WA-GATEWAY] ✅ Balasan set topik terkirim ke ${senderJid}`);
                 }
             } catch (replyErr) {
-                console.error(`[WA-GATEWAY] Gagal membalas pesan ke ${senderJid}:`, replyErr.message);
+                console.error(`[WA-GATEWAY] ❌ Gagal membalas pesan ke ${senderJid}:`, replyErr);
             }
         }
     });

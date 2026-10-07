@@ -8,13 +8,53 @@ logger = logging.getLogger(__name__)
 class TelegramError(Exception):
     pass
 
+DEFAULT_TOPICS = ["ihsg", "gainers", "losers", "sektor", "asing", "makro", "ipo", "watchlist", "berita"]
+
+def get_telegram_preference(chat_id: str) -> list:
+    """Fetch preference for this telegram chat id from Supabase."""
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        return DEFAULT_TOPICS
+
+    try:
+        url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=preferences&jid=eq.{chat_id}&is_active=eq.true"
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}"
+        }
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data and data[0].get("preferences"):
+                return data[0]["preferences"]
+    except Exception as e:
+        logger.warning(f"Failed to fetch telegram preference: {e}")
+        
+    return DEFAULT_TOPICS
+
+def build_message_from_dict(message_dict: dict, preferences: list) -> str:
+    """Constructs the final text based on user preferences."""
+    if not preferences:
+        preferences = DEFAULT_TOPICS
+    
+    parts = ["📊 **BRIEFIN • DAILY MARKET BRIEF**\n"]
+    
+    topic_order = ["ihsg", "gainers", "losers", "sektor", "asing", "makro", "ipo", "watchlist", "berita"]
+    for key in topic_order:
+        if key in preferences and key in message_dict and message_dict[key]:
+            parts.append(str(message_dict[key]).strip())
+    
+    parts.append("\n_Automated by Briefin_")
+    return "\n\n".join(parts)
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((requests.RequestException, TelegramError)),
     reraise=True
 )
-def send_telegram_message(message_text: str, image_path: str = None):
+def send_telegram_message(message_dict: dict, image_path: str = None):
     """
     Sends a message to the configured Telegram chat with optional image attachment.
     Uses Markdown parsing mode.
@@ -25,6 +65,9 @@ def send_telegram_message(message_text: str, image_path: str = None):
     if not bot_token or not chat_id:
         logger.error("Telegram credentials missing (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID).")
         raise ValueError("Missing Telegram credentials.")
+        
+    preferences = get_telegram_preference(chat_id)
+    message_text = build_message_from_dict(message_dict, preferences)
         
     if image_path and os.path.exists(image_path):
         # Telegram sendPhoto supports caption up to 1024 chars

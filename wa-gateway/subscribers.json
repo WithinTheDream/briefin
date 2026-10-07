@@ -1,3 +1,17 @@
 [
-  "154459992793290@lid"
+  {
+    "jid": "154459992793290@lid",
+    "preferences": [
+      "ihsg",
+      "losers"
+    ],
+    "card_style": "1"
+  },
+  {
+    "jid": "6282137297605-1628163792@g.us",
+    "preferences": [
+      "ihsg"
+    ],
+    "card_style": "1"
+  }
 ]

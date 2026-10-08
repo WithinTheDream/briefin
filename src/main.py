@@ -86,6 +86,48 @@ def dispatch_error_alert(error_msg: str):
         except Exception:
             pass
 
+def save_daily_brief_to_supabase(normalized: dict, message_dict: dict):
+    """
+    Saves the latest daily brief to Supabase table `daily_briefs`.
+    Allows the frontend (briefin-web) to load and render Today's Market Brief dynamically.
+    """
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        logger.info("Supabase not configured for daily brief storage. Skipping database sync.")
+        return False
+
+    try:
+        import requests
+        from datetime import datetime
+        
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        headers = {
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal"
+        }
+        
+        payload = {
+            "brief_date": today_date,
+            "ihsg": normalized.get("ihsg", {}),
+            "summary": message_dict,
+            "normalized": normalized
+        }
+        
+        url = f"{supabase_url.rstrip('/')}/rest/v1/daily_briefs"
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+        if resp.status_code in (200, 201, 204):
+            logger.info("✅ Successfully synced Today's Brief to Supabase `daily_briefs`.")
+            return True
+        else:
+            logger.warning(f"Failed to sync brief to Supabase [{resp.status_code}]: {resp.text}")
+            return False
+    except Exception as err:
+        logger.warning(f"Error while saving daily brief to Supabase: {err}")
+        return False
+
 CACHE_DATA_FILE = "logs/cached_normalized.json"
 CACHE_SUMMARY_FILE = "logs/cached_summary.json"
 
@@ -160,11 +202,14 @@ def main():
             with open(CACHE_SUMMARY_FILE, "w", encoding="utf-8") as f:
                 json.dump(message_dict, f)
         
-        # Step 4: Generate Market Infographic Card (using requested style)
+        # Step 4: Sync to Supabase for Web Hub (Today's Brief)
+        save_daily_brief_to_supabase(normalized, message_dict)
+
+        # Step 5: Generate Market Infographic Card (using requested style)
         logger.info(f"Generating market infographic card style {args.card}...")
         image_path = generate_market_card(normalized, card_output, card_style=args.card)
         
-        # Step 5: Dispatch to Telegram & WhatsApp
+        # Step 6: Dispatch to Telegram & WhatsApp
         dispatch_brief(message_dict, image_path=image_path, target=args.target)
         logger.info("Workflow completed successfully.")
         

@@ -290,7 +290,8 @@ def build_message_from_dict(message_dict: dict, preferences: list) -> str:
         if key in preferences and key in message_dict and message_dict[key]:
             parts.append(str(message_dict[key]).strip())
     
-    parts.append("_Automated by Briefin_")
+    web_url = os.getenv("BRIEFIN_WEB_URL", "https://briefin.id")
+    parts.append(f"🌐 *Cek grafik & Today's Brief di web:*\n{web_url}/today.html\n\n_Automated by Briefin_")
     return "\n\n".join(parts)
 
 @retry(

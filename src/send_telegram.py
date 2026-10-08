@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -11,25 +12,39 @@ class TelegramError(Exception):
 DEFAULT_TOPICS = ["ihsg", "gainers", "losers", "sektor", "asing", "makro", "ipo", "watchlist", "berita"]
 
 def get_telegram_preference(chat_id: str) -> list:
-    """Fetch preference for this telegram chat id from Supabase."""
+    """Fetch preference for this telegram chat id from local subscribers or Supabase."""
+    # 1. Check local subscribers.json first
+    subscribers_file = os.path.join(os.path.dirname(__file__), "..", "wa-gateway", "subscribers.json")
+    if os.path.exists(subscribers_file):
+        try:
+            with open(subscribers_file, "r", encoding="utf-8") as f:
+                target_candidates = {str(chat_id), f"{chat_id}@tg"}
+                for s in subs:
+                    s_jid = str(s.get("jid"))
+                    s_phone = str(s.get("phone", ""))
+                    if s_jid in target_candidates or s_phone in target_candidates:
+                        if s.get("preferences"):
+                            return s.get("preferences")
+        except Exception as e:
+            logger.warning(f"Failed to read local subscribers for telegram: {e}")
+
+    # 2. Check Supabase
     supabase_url = os.getenv("SUPABASE_URL")
     supabase_key = os.getenv("SUPABASE_KEY")
-    if not supabase_url or not supabase_key:
-        return DEFAULT_TOPICS
-
-    try:
-        url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=preferences&jid=eq.{chat_id}&is_active=eq.true"
-        headers = {
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}"
-        }
-        resp = requests.get(url, headers=headers, timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data and data[0].get("preferences"):
-                return data[0]["preferences"]
-    except Exception as e:
-        logger.warning(f"Failed to fetch telegram preference: {e}")
+    if supabase_url and supabase_key:
+        try:
+            url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=preferences&jid=eq.{chat_id}&is_active=eq.true"
+            headers = {
+                "apikey": supabase_key,
+                "Authorization": f"Bearer {supabase_key}"
+            }
+            resp = requests.get(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data and data[0].get("preferences"):
+                    return data[0]["preferences"]
+        except Exception as e:
+            logger.warning(f"Failed to fetch telegram preference from supabase: {e}")
         
     return DEFAULT_TOPICS
 
@@ -55,13 +70,13 @@ def build_message_from_dict(message_dict: dict, preferences: list) -> str:
     retry=retry_if_exception_type((requests.RequestException, TelegramError)),
     reraise=True
 )
-def send_telegram_message(message_dict: dict, image_path: str = None):
+def send_telegram_message(message_dict: dict, image_path: str = None, target: str = None):
     """
     Sends a message to the configured Telegram chat with optional image attachment.
     Uses Markdown parsing mode.
     """
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id = target or os.getenv("TELEGRAM_CHAT_ID")
     
     if not bot_token or not chat_id:
         logger.error("Telegram credentials missing (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID).")

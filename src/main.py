@@ -42,14 +42,29 @@ def dispatch_brief(message_dict: dict, image_path: str = None, target: str = Non
         
     delivery_success = False
     
-    # If target is specified and looks like a WhatsApp number/JID
-    is_wa_target = target and (target.endswith("@s.whatsapp.net") or target.endswith("@g.us") or target.endswith("@lid") or target.replace("+", "").isdigit())
-    is_tg_target = target and not is_wa_target
+    # If target is specified, distinguish WhatsApp vs Telegram targets
+    # WA targets: ends with @s.whatsapp.net, @g.us, @lid, or starts with wa:
+    # TG targets: ends with @tg, or numeric chat ID if matches TELEGRAM_CHAT_ID, or negative group ID
+    target_str = str(target).strip() if target else ""
+    is_tg_target = False
+    is_wa_target = False
+    if target_str:
+        if target_str.endswith("@tg"):
+            is_tg_target = True
+            target = target_str[:-3]
+        elif target_str.endswith("@s.whatsapp.net") or target_str.endswith("@g.us") or target_str.endswith("@lid"):
+            is_wa_target = True
+        elif target_str == os.getenv("TELEGRAM_CHAT_ID"):
+            is_tg_target = True
+        elif target_str.startswith("-100") or (target_str.isdigit() and len(target_str) < 11 and not target_str.startswith("62")):
+            is_tg_target = True
+        else:
+            is_wa_target = True
 
     if telegram_ready and (not target or is_tg_target):
         try:
-            logger.info("Sending brief to Telegram...")
-            send_telegram_message(message_dict, image_path=image_path)
+            logger.info(f"Sending brief to Telegram ({target or 'Default Chat'})...")
+            send_telegram_message(message_dict, image_path=image_path, target=target)
             delivery_success = True
         except Exception as e:
             logger.error(f"Failed to send to Telegram: {e}")

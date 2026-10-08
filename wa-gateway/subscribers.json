@@ -10,7 +10,18 @@
   {
     "jid": "6282137297605-1628163792@g.us",
     "preferences": [
-      "ihsg"
+      "gainers"
+    ],
+    "card_style": "2"
+  },
+  {
+    "jid": "1490026999@tg",
+    "phone": "azsx5dc",
+    "preferences": [
+      "ihsg",
+      "gainers",
+      "losers",
+      "berita"
     ],
     "card_style": "1"
   }

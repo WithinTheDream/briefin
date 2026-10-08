@@ -11,6 +11,15 @@ console.info = function (...args) {
     originalConsoleInfo.apply(console, args);
 };
 
+const originalConsoleError = console.error;
+console.error = function (...args) {
+    const str = (args[0] && typeof args[0] === 'string') ? args[0] : (args[0]?.message || '');
+    if (str.includes('Bad MAC') || str.includes('Failed to decrypt message with any known session')) {
+        return;
+    }
+    originalConsoleError.apply(console, args);
+};
+
 const express = require('express');
 const {
     default: makeWASocket,
@@ -303,10 +312,11 @@ function extractMessageText(msg) {
                     const mainPyPath = path.resolve(__dirname, '../src/main.py');
                     const projectRoot = path.resolve(__dirname, '..');
 
-                    const pyCmd = `python "${mainPyPath}" --target "${formattedSender}" --card "${cardStyle}"`;
+                    const pyBin = process.env.PYTHON_PATH || 'python3';
+                    const pyCmd = `${pyBin} "${mainPyPath}" --target "${formattedSender}" --card "${cardStyle}"`;
                     console.log(`[WA-GATEWAY] Menjalankan: ${pyCmd}`);
 
-                    exec(pyCmd, { cwd: projectRoot }, (err, stdout, stderr) => {
+                    exec(pyCmd, { cwd: projectRoot, env: { ...process.env, PYENV_VERSION: process.env.PYENV_VERSION || '3.12.11' } }, (err, stdout, stderr) => {
                         if (err) {
                             console.error(`[WA-GATEWAY] ❌ Gagal trigger briefin untuk ${formattedSender}:`, stderr || err.message);
                             sock.sendMessage(senderJid, { text: `⚠️ Gagal menghasilkan brief. Silakan coba lagi beberapa saat lagi.` }).catch(() => {});

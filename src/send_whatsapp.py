@@ -222,7 +222,7 @@ def get_subscribers_from_supabase() -> list:
         return []
 
     try:
-        url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=jid,phone,preferences,card_style&is_active=eq.true"
+        url = f"{supabase_url.rstrip('/')}/rest/v1/subscribers?select=*&is_active=eq.true"
         headers = {
             "apikey": supabase_key,
             "Authorization": f"Bearer {supabase_key}"
@@ -234,7 +234,7 @@ def get_subscribers_from_supabase() -> list:
             for item in data:
                 jid = item.get("jid") or item.get("phone")
                 if jid:
-                    subs.append(SubscriberJid(jid, preferences=item.get("preferences"), card_style=item.get("card_style")))
+                    subs.append(SubscriberJid(jid, preferences=item.get("preferences") or DEFAULT_TOPICS, card_style=item.get("card_style") or "1"))
             logger.info(f"Retrieved {len(subs)} active subscriber(s) directly from Supabase.")
             return subs
         logger.warning(f"Supabase returned status {resp.status_code}: {resp.text}")
@@ -245,14 +245,12 @@ def get_subscribers_from_supabase() -> list:
 def get_registered_subscribers(gateway_url: str = None) -> list:
     """
     Fetches the list of active subscribers with their preferences.
-    Prioritizes Supabase Cloud, with fallback to WhatsApp Gateway endpoint.
+    Merges local gateway subscribers and Supabase Cloud subscribers to ensure
+    up-to-date preferences are always respected.
     """
-    # 1. Try Supabase Cloud first
-    supabase_subs = get_subscribers_from_supabase()
-    if supabase_subs:
-        return supabase_subs
+    subscribers_map = {}
 
-    # 2. Fallback to local Gateway /subscribers endpoint
+    # 1. Fetch from local Gateway /subscribers endpoint first if available
     if gateway_url:
         try:
             url = f"{gateway_url.rstrip('/')}/subscribers"
@@ -260,18 +258,30 @@ def get_registered_subscribers(gateway_url: str = None) -> list:
             if response.status_code == 200:
                 data = response.json()
                 raw_subs = data.get("subscribers", [])
-                formatted_subs = []
                 for s in raw_subs:
                     if isinstance(s, dict):
                         jid = s.get("jid") or s.get("phone")
                         if jid:
-                            formatted_subs.append(SubscriberJid(jid, preferences=s.get("preferences"), card_style=s.get("card_style")))
+                            norm = normalize_target_jid(jid)
+                            subscribers_map[norm] = SubscriberJid(jid, preferences=s.get("preferences"), card_style=s.get("card_style"))
                     elif isinstance(s, str):
-                        formatted_subs.append(SubscriberJid(s, preferences=DEFAULT_TOPICS, card_style="1"))
-                return formatted_subs
+                        norm = normalize_target_jid(s)
+                        subscribers_map[norm] = SubscriberJid(s, preferences=DEFAULT_TOPICS, card_style="1")
         except Exception as err:
             logger.warning(f"Could not fetch subscribers from gateway: {err}")
-    return []
+
+    # 2. Fetch from Supabase Cloud
+    supabase_subs = get_subscribers_from_supabase()
+    for sub in supabase_subs:
+        norm = normalize_target_jid(sub)
+        if norm not in subscribers_map:
+            subscribers_map[norm] = sub
+        else:
+            # If supabase has specific preferences set, allow it to override defaults
+            if hasattr(sub, "preferences") and sub.preferences and sub.preferences != DEFAULT_TOPICS:
+                subscribers_map[norm].preferences = sub.preferences
+
+    return list(subscribers_map.values())
 
 DEFAULT_TOPICS = ["ihsg", "gainers", "losers", "sektor", "asing", "makro", "ipo", "watchlist", "berita"]
 

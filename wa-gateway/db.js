@@ -107,6 +107,11 @@ async function getActiveSubscribers() {
  */
 async function isSubscribed(jid) {
     if (!jid) return false;
+
+    // Cek file lokal terlebih dahulu
+    const local = readLocalSubscribers().find(s => s.jid === jid);
+    if (local) return true;
+
     if (supabase) {
         try {
             const { data, error } = await supabase
@@ -117,18 +122,15 @@ async function isSubscribed(jid) {
 
             if (error) {
                 console.error('[DB] Supabase error isSubscribed:', error.message);
-                const local = readLocalSubscribers().find(s => s.jid === jid);
                 return Boolean(local);
             }
 
             return Boolean(data && data.is_active);
         } catch (err) {
             console.error('[DB] Exception isSubscribed:', err.message);
-            const local = readLocalSubscribers().find(s => s.jid === jid);
             return Boolean(local);
         }
     }
-    const local = readLocalSubscribers().find(s => s.jid === jid);
     return Boolean(local);
 }
 
@@ -144,7 +146,7 @@ async function addSubscriber(jid, phone = null) {
     const local = readLocalSubscribers();
     const existingIndex = local.findIndex(s => s.jid === jid);
     if (existingIndex === -1) {
-        local.push({ jid, preferences: defaultPrefs });
+        local.push({ jid, preferences: defaultPrefs, card_style: '1' });
     }
     saveLocalSubscribers(local);
 
@@ -154,7 +156,6 @@ async function addSubscriber(jid, phone = null) {
                 jid: jid,
                 phone: finalPhone || 'unknown',
                 is_active: true,
-                preferences: defaultPrefs,
                 updated_at: new Date().toISOString()
             };
 
@@ -164,12 +165,12 @@ async function addSubscriber(jid, phone = null) {
 
             if (error) {
                 console.error('[DB] Supabase error addSubscriber:', error.message);
-                return false;
+                return true; // Tetap berhasil karena sudah tersimpan di lokal
             }
             return true;
         } catch (err) {
             console.error('[DB] Exception addSubscriber:', err.message);
-            return false;
+            return true;
         }
     }
     return true;
@@ -200,12 +201,12 @@ async function removeSubscriber(jid) {
 
             if (error) {
                 console.error('[DB] Supabase error removeSubscriber:', error.message);
-                return false;
+                return true;
             }
             return true;
         } catch (err) {
             console.error('[DB] Exception removeSubscriber:', err.message);
-            return false;
+            return true;
         }
     }
     return true;
@@ -226,7 +227,7 @@ async function updatePreferences(jid, preferences) {
     if (existingIndex !== -1) {
         local[existingIndex].preferences = preferences;
     } else {
-        local.push({ jid, preferences });
+        local.push({ jid, preferences, card_style: '1' });
     }
     saveLocalSubscribers(local);
 
@@ -241,13 +242,14 @@ async function updatePreferences(jid, preferences) {
                 .eq('jid', jid);
 
             if (error) {
-                console.error('[DB] Supabase error updatePreferences:', error.message);
-                return false;
+                // Jangan error jika kolom preferences belum dibuat di Supabase
+                console.warn('[DB] Supabase notice updatePreferences (tersimpan di lokal):', error.message);
+                return true;
             }
             return true;
         } catch (err) {
-            console.error('[DB] Exception updatePreferences:', err.message);
-            return false;
+            console.warn('[DB] Exception updatePreferences:', err.message);
+            return true;
         }
     }
     return true;

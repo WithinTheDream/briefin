@@ -37,6 +37,7 @@ const { exec } = require('child_process');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const AUTH_DIR = path.join(__dirname, 'auth_session');
+const BRIEFIN_WEB_URL = process.env.BRIEFIN_WEB_URL || 'https://withinthedream.github.io/briefin-web';
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -254,7 +255,7 @@ function extractMessageText(msg) {
                     }
                     console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi pendaftaran ke ${senderJid}...`);
                     await sock.sendMessage(senderJid, {
-                        text: `📈 *Selamat datang di Briefin!*\n\nNomor kamu berhasil terdaftar. Kamu akan otomatis menerima analisis harian pasar saham IDX (IHSG, top movers, market cap) & kartu infografis setiap pagi hari bursa (Senin–Jumat pukul 06:30 WIB).\n\n• Ketik *!topik* untuk atur preferensi topik\n• Ketik *!info* untuk cek status langganan\n• Ketik *!batal* untuk berhenti berlangganan`
+                        text: `📈 *Selamat datang di Briefin!*\n\nNomor kamu berhasil terdaftar. Kamu akan otomatis menerima analisis harian pasar saham IDX (IHSG, top movers, market cap) & kartu infografis setiap pagi hari bursa (Senin–Jumat pukul 06:30 WIB).\n\n• Ketik *!topik* untuk atur preferensi topik\n• Ketik *!kartu* untuk pilih desain infografis\n• Ketik *!web* untuk link portal web\n• Ketik *!info* untuk cek status langganan\n• Ketik *!batal* untuk berhenti berlangganan\n\n🌐 *Portal Web & Today's Brief:*\n${BRIEFIN_WEB_URL}/today.html`
                     });
                     console.log(`[WA-GATEWAY] ✅ Balasan !daftar terkirim ke ${senderJid}`);
                 } else if (['!batal', 'batal', '/stop', '!stop', '!unsub', 'unsub', '!unsubscribe'].includes(text)) {
@@ -264,9 +265,18 @@ function extractMessageText(msg) {
                     }
                     console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi berhenti ke ${senderJid}...`);
                     await sock.sendMessage(senderJid, {
-                        text: `👋 *Berhenti Berlangganan*\n\nKamu telah berhenti berlangganan Briefin. Kamu tidak akan menerima brief harian lagi.\n\nKetik *!daftar* kapan saja jika ingin bergabung kembali!`
+                        text: `👋 *Berhenti Berlangganan*\n\nKamu telah berhenti berlangganan Briefin. Kamu tidak akan menerima brief harian lagi.\n\nKetik *!daftar* kapan saja jika ingin bergabung kembali!\nKamu juga tetap bisa membaca ulasan pasar harian di:\n${BRIEFIN_WEB_URL}/today.html`
                     });
                     console.log(`[WA-GATEWAY] ✅ Balasan !batal terkirim ke ${senderJid}`);
+                } else if (['!web', '/web', '!portal', '/portal', 'web', 'website'].includes(text)) {
+                    console.log(`[WA-GATEWAY] 📤 Mengirim info web ke ${senderJid}...`);
+                    await sock.sendMessage(senderJid, {
+                        text: `🌐 *Briefin Web Portal & Live Intelligence*\n\n` +
+                              `• *Beranda & Pusat Info:* \n${BRIEFIN_WEB_URL}\n\n` +
+                              `• *Today's Market Brief (9 Topik & 3 Infografis):* \n${BRIEFIN_WEB_URL}/today.html\n\n` +
+                              `Akses ringkasan IHSG, top movers, dan unduh infografis bursa resolusi tinggi langsung di browsermu!`
+                    });
+                    console.log(`[WA-GATEWAY] ✅ Balasan !web terkirim ke ${senderJid}`);
                 } else if (['!info', 'info', '!help', 'help', 'menu', '!menu'].includes(text)) {
                     const statusText = registered ? '✅ Terdaftar (Aktif)' : '❌ Belum Terdaftar';
                     const subData = await getSubscriber(formattedSender);
@@ -275,7 +285,7 @@ function extractMessageText(msg) {
 
                     console.log(`[WA-GATEWAY] 📤 Mengirim info ke ${senderJid}...`);
                     await sock.sendMessage(senderJid, {
-                        text: `📊 *Briefin • Market Assistant*\n\nStatus: *${statusText}*\nTopik Aktif: *${curPrefs}*\nGaya Kartu: *Versi ${curCard}*\n\n*Perintah yang tersedia:*\n• *!briefin* - ⚡ Kirim market brief hari ini sekarang juga\n• *!topik* - Atur preferensi 9 topik pasar\n• *!kartu* - Pilih desain visual infografis (1, 2, atau 3)\n• *!daftar* - Berlangganan otomatis pagi hari (06:30 WIB)\n• *!info* - Cek status akun kamu\n• *!batal* - Berhenti berlangganan`
+                        text: `📊 *Briefin • Market Assistant*\n\nStatus: *${statusText}*\nTopik Aktif: *${curPrefs}*\nGaya Kartu: *Versi ${curCard}*\n\n*Perintah yang tersedia:*\n• *!briefin* - ⚡ Kirim market brief hari ini sekarang juga\n• *!topik* - Atur preferensi 9 topik pasar\n• *!kartu* - Pilih desain visual infografis (1, 2, atau 3)\n• *!web* - Link portal web & Today's Brief live\n• *!daftar* - Berlangganan otomatis pagi hari (06:30 WIB)\n• *!info* - Cek status akun kamu\n• *!batal* - Berhenti berlangganan\n\n🌐 *Portal Web:* ${BRIEFIN_WEB_URL}/today.html`
                     });
                     console.log(`[WA-GATEWAY] ✅ Balasan !info terkirim ke ${senderJid}`);
                 } else if (['!briefin', '/briefin', 'briefin'].includes(text)) {
@@ -311,7 +321,8 @@ function extractMessageText(msg) {
                               `*1. Versi 1 (Standard)*: IHSG Composite Pulse + Top 5 Gainers & Losers (Angka IHSG Putih Bersih)\n` +
                               `*2. Versi 2 (Sector & Macro)*: IDX Sector Heatmap + Global Macro (Minyak, Emas, CPO) & Technical Watchlist\n` +
                               `*3. Versi 3 (Executive All-in-One)*: Dashboard Lengkap (IHSG, Gainers/Losers, Sektor, & Watchlist)\n\n` +
-                              `Ketik *!kartu 1*, *!kartu 2*, atau *!kartu 3* untuk memilih gaya favoritmu!`
+                              `Ketik *!kartu 1*, *!kartu 2*, atau *!kartu 3* untuk memilih gaya favoritmu!\n\n` +
+                              `🌐 *Lihat perbandingan preview 3 kartu di web:*\n${BRIEFIN_WEB_URL}#gaya-kartu`
                     });
                     console.log(`[WA-GATEWAY] ✅ Balasan menu kartu terkirim ke ${senderJid}`);
                 } else if (
@@ -327,7 +338,7 @@ function extractMessageText(msg) {
                         const names = { '1': 'Versi 1 (Standard Movers)', '2': 'Versi 2 (Sector & Macro Radar)', '3': 'Versi 3 (Executive All-in-One)' };
                         console.log(`[WA-GATEWAY] 📤 Update gaya kartu [${arg}] untuk ${senderJid}`);
                         await sock.sendMessage(senderJid, {
-                            text: `✅ Gaya kartu berhasil diubah ke: *${names[arg]}*!\nKetik *!briefin* untuk melihat hasilnya sekarang.`
+                            text: `✅ Gaya kartu berhasil diubah ke: *${names[arg]}*!\nKetik *!briefin* untuk melihat hasilnya sekarang.\n\n🌐 Cek Today's Brief di web: ${BRIEFIN_WEB_URL}/today.html`
                         });
                     }
                 } else if (['!topik', '/topik', '!topic', '/topic', 'topik', 'topic'].includes(text)) {
@@ -345,7 +356,8 @@ function extractMessageText(msg) {
                               `8. *Watchlist Saham* (2-3 Rekomendasi Teknikal)\n` +
                               `9. *Tips & Strategi* (Money Management)\n\n` +
                               `Contoh ketik: *!topik 1,4,8* untuk memilih IHSG, Sektor, dan Watchlist.\n` +
-                              `Ketik *!topik all* untuk memilih semua topik.`
+                              `Ketik *!topik all* untuk memilih semua topik.\n\n` +
+                              `🌐 *Baca semua 9 topik lengkap di web:*\n${BRIEFIN_WEB_URL}/today.html`
                     });
                     console.log(`[WA-GATEWAY] ✅ Balasan menu topik terkirim ke ${senderJid}`);
                 } else if (
@@ -362,7 +374,9 @@ function extractMessageText(msg) {
                     if (arg === 'all' || arg === 'semua') {
                         await updatePreferences(formattedSender, DEFAULT_PREFERENCES);
                         console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi topik 'all' ke ${senderJid}...`);
-                        await sock.sendMessage(senderJid, { text: `✅ Preferensi disimpan! Kamu akan menerima seluruh 9 topik pasar.\nKetik *!briefin* untuk melihat hasilnya sekarang.` });
+                        await sock.sendMessage(senderJid, {
+                            text: `✅ Preferensi disimpan! Kamu akan menerima seluruh 9 topik pasar.\nKetik *!briefin* untuk melihat hasilnya sekarang.\n\n🌐 Cek live web: ${BRIEFIN_WEB_URL}/today.html`
+                        });
                     } else {
                         const map = {
                             '1': 'ihsg',
@@ -383,7 +397,7 @@ function extractMessageText(msg) {
                             await updatePreferences(formattedSender, newPrefs);
                             console.log(`[WA-GATEWAY] 📤 Mengirim konfirmasi topik [${newPrefs.join(', ')}] ke ${senderJid}...`);
                             await sock.sendMessage(senderJid, {
-                                text: `✅ Preferensi topik berhasil disimpan: *${newPrefs.join(', ')}*!\nKetik *!briefin* untuk melihat hasilnya sekarang.`
+                                text: `✅ Preferensi topik berhasil disimpan: *${newPrefs.join(', ')}*!\nKetik *!briefin* untuk melihat hasilnya sekarang.\n\n🌐 Baca selengkapnya di web: ${BRIEFIN_WEB_URL}/today.html`
                             });
                         }
                     }
